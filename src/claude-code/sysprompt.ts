@@ -14,6 +14,10 @@
 // sync service) causes a clean failure rather than overwriting an
 // attacker-chosen target.
 
+// Justification (community review): os.tmpdir() is read only as the
+// fallback location for the temp system-prompt file when runtimeDir
+// (vault-relative, plugin-owned) is unavailable. No identifying data is
+// read from `os`; the path is handed to a locally-spawned subprocess.
 import { tmpdir } from 'os';
 import { join as joinPath } from 'path';
 import { makeNonce } from '../util/guards';
@@ -92,7 +96,7 @@ export async function cleanupSysPromptFile(
 ): Promise<void> {
 	try {
 		await io.unlink(path);
-	} catch (_e) {
+	} catch {
 		// best-effort cleanup
 	}
 }

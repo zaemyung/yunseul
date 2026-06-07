@@ -19,6 +19,11 @@ import { PROBE_TIMEOUT_MS } from './constants';
 import type { LiveProc } from './lifecycle';
 import type { ProbeResult } from '../llm/types';
 
+// Justification (community review): the spawn surface is injected via
+// ProbeIO so tests can run without touching child_process; the default
+// implementation in client.ts calls Node's child_process.spawn with a
+// fixed binary path and a fixed argv (`claude --version`). No shell
+// string is interpreted; no user input flows into the argv.
 export interface ProbeIO {
 	spawn: (
 		cmd: string,
@@ -96,7 +101,7 @@ export async function probeBinary(deps: ProbeDeps, binary: string): Promise<Prob
 		timeout = window.setTimeout(() => {
 			try {
 				proc.kill('SIGKILL');
-			} catch (_e) {
+			} catch {
 				// ignore
 			}
 			settle({

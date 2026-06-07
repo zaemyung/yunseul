@@ -405,6 +405,11 @@ export class AIChatView extends ItemView {
 		new Notice(`Bound ${af.basename}`);
 	}
 
+	// Justification (community review): clipboard writes are user-initiated
+	// only — they originate from explicit Copy buttons (per-message and
+	// Copy All) the user clicks. We never read from the clipboard; we
+	// never write without a user gesture. The adapter is implemented with
+	// navigator.clipboard.writeText which is the standard browser API.
 	private readonly clipboardAdapter: ClipboardAdapter = {
 		write: async (text) => {
 			try {

@@ -218,14 +218,14 @@ function killWithEscalation(
 ): void {
 	try {
 		proc.kill('SIGTERM');
-	} catch (_e) {
+	} catch {
 		// ignore; process may already be gone
 	}
 	const handle = window.setTimeout(() => {
 		if (proc.exitCode === null && proc.signalCode === null) {
 			try {
 				proc.kill('SIGKILL');
-			} catch (_e) {
+			} catch {
 				// ignore
 			}
 		}
@@ -266,13 +266,13 @@ function pumpStdin(
 	});
 	try {
 		stdin.write(payload);
-	} catch (_e) {
+	} catch {
 		// Synchronous throw from write() (rare). Swallow; the close
 		// handler reports the real failure.
 	}
 	try {
 		stdin.end();
-	} catch (_e) {
+	} catch {
 		// stdin already closed; close handler reports the underlying
 		// cause.
 	}

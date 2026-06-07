@@ -414,7 +414,7 @@ function openYunseulSettings(plugin: YunseulPlugin): void {
 	try {
 		settingApi.open();
 		settingApi.openTabById('yunseul');
-	} catch (_e) {
+	} catch {
 		new Notice('Open Settings → Yunseul to configure.');
 	}
 }

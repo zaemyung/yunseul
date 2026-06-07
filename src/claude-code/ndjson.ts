@@ -145,7 +145,7 @@ export function parseStreamLine(line: string, handlers: NdjsonHandlers): void {
 	let event: unknown;
 	try {
 		event = JSON.parse(line);
-	} catch (_e) {
+	} catch {
 		// Skip malformed lines silently — defensive against the CLI
 		// emitting a non-JSON warning that escaped stderr.
 		handlers.debug(`claude-code: dropping non-JSON line: ${line.slice(0, 100)}`);

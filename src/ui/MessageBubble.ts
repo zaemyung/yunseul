@@ -148,7 +148,11 @@ export function renderMessageBubble(
 	let prefillTimer: number | null = null;
 	let prefillLabel: HTMLSpanElement | null = null;
 	let prefillElapsed: HTMLSpanElement | null = null;
-	let _prefillCaret: HTMLSpanElement | null = null;
+	// NOTE: a previous caret reference (`_prefillCaret`) was removed as dead
+	// code — the createSpan side-effect in setThinking() still inserts the
+	// caret into the body DOM and clearPrefill()/updateContent() wipe it via
+	// body.empty(). Re-introduce a binding here if/when caret-decoration
+	// hooks need to mutate the span post-mount.
 	// Sr-only spans inserted at stream start / completion for single
 	// polite announcements (not per-token live region — that would
 	// overwhelm screen readers).
@@ -163,7 +167,6 @@ export function renderMessageBubble(
 		prefillStart = 0;
 		prefillLabel = null;
 		prefillElapsed = null;
-		_prefillCaret = null;
 	};
 
 	const setThinking = (): void => {
@@ -174,7 +177,10 @@ export function renderMessageBubble(
 		// transcript will defer announcements properly. Cleared in
 		// updateContent(isFinal:true) and markComplete.
 		root.setAttr('aria-busy', 'true');
-		_prefillCaret = body.createSpan({
+		// The caret span is appended for visual-only "thinking" feedback;
+		// we don't retain a reference — clearPrefill() resets via body.empty()
+		// in the next render.
+		body.createSpan({
 			cls: 'yunseul-caret',
 			text: '▍',
 			attr: { 'aria-hidden': 'true' },

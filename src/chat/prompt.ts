@@ -266,6 +266,6 @@ function escapeAttr(value: string): string {
 	// with a literal " or includes markup characters in its filename
 	// (legal on POSIX). Backslashes are removed so a Windows-style
 	// synced path doesn't embed unexpected escape sequences.
-	// eslint-disable-next-line no-control-regex
+	// eslint-disable-next-line no-control-regex -- escapeAttr strips C0/C1 control chars from filenames to keep the <vault_excerpt> wrapper tag well-formed; the control-range character class is intentional
 	return value.replace(/[\x00-\x1f\x7f-\x9f"<>\\]/g, '');
 }

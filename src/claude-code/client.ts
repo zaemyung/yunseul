@@ -1,4 +1,19 @@
+// Justification (community review): the Claude Code provider works by
+// spawning the user-installed `claude` CLI as a long-running subprocess
+// and streaming NDJSON from its stdout. We do NOT execute arbitrary
+// shell strings — spawn is called with a fixed binary path (from
+// settings, with default resolution via PATH) and a fixed argv array.
+// env is hardened by buildSafeEnv() (see env.ts). The subprocess's tool
+// permissions are controlled by --allowedTools.
 import { spawn } from 'child_process';
+// Justification (community review): the Claude Code provider writes a
+// temporary system prompt file under runtimeDir (vault-relative,
+// plugin-owned) so the CLI can consume it via
+// --append-system-prompt-file without hitting OS arg-length limits on
+// long vault excerpts. The Vault adapter API cannot expose an OS-level
+// path the spawned subprocess can read directly, so node fs is required.
+// All writes are scoped to runtimeDir(plugin) which lives under the
+// plugin folder and is cleaned up on uninstall.
 import { promises as fsp } from 'fs';
 import type YunseulPlugin from '../main';
 import { redactSecrets } from '../util/redact';
@@ -114,7 +129,7 @@ export class ClaudeCodeClient implements LLMClient {
 				// spurious "exited with code null" error branch.
 				entry.markAborted();
 				entry.proc.kill('SIGTERM');
-			} catch (_e) {
+			} catch {
 				// ignore: process may already be dead
 			}
 		}
@@ -144,7 +159,7 @@ export class ClaudeCodeClient implements LLMClient {
 		// message at Test time rather than a generic per-message error.
 		try {
 			vaultBasePath(this.plugin);
-		} catch (_e) {
+		} catch {
 			return {
 				ok: false,
 				kind: 'not-found',

@@ -112,7 +112,7 @@ export class LMClient implements LLMClient {
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(res.text);
-		} catch (_e) {
+		} catch {
 			throw new LMClientError('Server returned non-JSON for /models');
 		}
 		if (!isModelsResponse(parsed)) {
@@ -176,7 +176,12 @@ export class LMClient implements LLMClient {
 	): Promise<void> {
 		let res: Response;
 		try {
-			// eslint-disable-next-line no-restricted-globals -- streaming SSE requires fetch's ReadableStream; requestUrl returns the full body at once
+			// Streaming SSE requires fetch.ReadableStream; requestUrl
+			// returns the full body at once, defeating token streaming.
+			// probeDetailed() uses requestUrl as fallback so CORS issues
+			// are still detected. The obsidianmd preset's
+			// `no-restricted-globals` ban on `fetch` is reset for this
+			// file via the eslint config override.
 			res = await fetch(url, {
 				method: 'POST',
 				headers: {
@@ -210,7 +215,7 @@ export class LMClient implements LLMClient {
 			let detail = '';
 			try {
 				detail = await res.text();
-			} catch (_e) {
+			} catch {
 				detail = '';
 			}
 			const safeDetail = this.redactSecrets(detail);
@@ -238,12 +243,12 @@ export class LMClient implements LLMClient {
 			cleanedUp = true;
 			try {
 				await reader.cancel();
-			} catch (_e) {
+			} catch {
 				// ignore: cancel may throw if already closed
 			}
 			try {
 				reader.releaseLock();
-			} catch (_e) {
+			} catch {
 				// ignore: lock may already be released or a read is still pending
 			}
 		};
@@ -278,7 +283,7 @@ export class LMClient implements LLMClient {
 					let json: unknown;
 					try {
 						json = JSON.parse(ev.data);
-					} catch (_e) {
+					} catch {
 						// malformed chunk — skip silently per spec tolerance
 						continue;
 					}
@@ -296,7 +301,7 @@ export class LMClient implements LLMClient {
 				let json: unknown;
 				try {
 					json = JSON.parse(ev.data);
-				} catch (_e) {
+				} catch {
 					continue;
 				}
 				const token = extractStreamDelta(json);
@@ -359,7 +364,13 @@ export class LMClient implements LLMClient {
 		// specifically so the user can fix it without hunting.
 		const url = `${this.baseUrl()}/models`;
 		try {
-			// eslint-disable-next-line no-restricted-globals -- probe intentionally compares fetch vs requestUrl to detect CORS-only failures
+			// Probe compares fetch vs requestUrl to distinguish
+			// CORS-blocked (fetch fails, requestUrl succeeds) from
+			// genuinely offline (both fail). Substituting requestUrl
+			// here would hide the CORS-misconfiguration error state
+			// that users need to fix. The obsidianmd preset's
+			// `no-restricted-globals` ban on `fetch` is reset for this
+			// file via the eslint config override.
 			const res = await fetch(url, {
 				method: 'GET',
 				headers: this.authHeader(),

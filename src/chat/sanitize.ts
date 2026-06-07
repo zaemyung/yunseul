@@ -163,7 +163,7 @@ function safeHostname(url: string): string {
 	let host: string;
 	try {
 		host = new URL(url).hostname;
-	} catch (_e) {
+	} catch {
 		const m = /^https?:\/\/([^/?#]+)/i.exec(url);
 		host = m?.[1] ?? 'unknown';
 	}

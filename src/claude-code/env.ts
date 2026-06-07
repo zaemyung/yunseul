@@ -55,6 +55,12 @@ export const SAFE_ENV_PREFIXES: readonly string[] = [
 ];
 
 export function buildSafeEnv(): NodeJS.ProcessEnv {
+	// Justification (community review): we read process.env to construct
+	// the SAFE_ENV subset the Claude Code CLI subprocess inherits. The
+	// renderer's full env contains Electron internals and unrelated
+	// credentials the CLI does not need; the allowlist + ELECTRON_* strip
+	// is a hardening measure, NOT identity collection. No env data leaves
+	// the user machine; it is handed to a locally-spawned subprocess only.
 	const out: NodeJS.ProcessEnv = {};
 	const src = process.env;
 	for (const key of Object.keys(src)) {
@@ -85,6 +91,12 @@ export function buildSafeEnv(): NodeJS.ProcessEnv {
 }
 
 export function augmentPath(existing: string | undefined): string {
+	// Justification (community review): HOME / USERPROFILE are read only
+	// to compute additional PATH entries for common CLI install locations
+	// (Homebrew, npm-global, $HOME/.local/bin, etc.). The values never
+	// leave the user machine — they become PATH segments handed to a
+	// locally-spawned subprocess so the `claude` binary is discoverable
+	// when Electron launches from Finder/Dock with a stripped PATH.
 	const sep = process.platform === 'win32' ? ';' : ':';
 	const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
 	const additions = [

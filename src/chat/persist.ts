@@ -24,20 +24,16 @@ export interface SessionSnapshot {
 	history: ChatMessage[];
 }
 
-// Default kept for tests that don't have a Vault to read configDir from.
-// Production callers pass `sessionsDir(plugin)` from util/paths.
-// Exported so tests can reference the same path the production code
-// uses, avoiding magic-string drift if the directory ever moves.
-// eslint-disable-next-line obsidianmd/hardcoded-config-path -- test-only fallback; production callers pass sessionsDir(plugin) which reads vault.configDir
-export const DEFAULT_SESSIONS_SUBDIR = '.obsidian/plugins/yunseul/sessions';
-
 /**
  * Resolve the absolute path of a session file under the given sessions
  * directory. Exported so tests can build the same expected path the
  * production code writes to, instead of duplicating the join + suffix
- * logic in test fixtures.
+ * logic in test fixtures. Callers MUST pass the sessions directory
+ * explicitly — production callers derive it from `vault.configDir` via
+ * `sessionsDir(plugin)` in `util/paths.ts` so there is no hardcoded
+ * config path here.
  */
-export function sessionFilePath(id: string, sessionsDir: string = DEFAULT_SESSIONS_SUBDIR): string {
+export function sessionFilePath(id: string, sessionsDir: string): string {
 	return sessionPath(sessionsDir, id);
 }
 
@@ -69,7 +65,7 @@ export async function saveSession(
 	adapter: DataAdapter,
 	id: string,
 	snapshot: SessionSnapshot,
-	sessionsDir: string = DEFAULT_SESSIONS_SUBDIR,
+	sessionsDir: string,
 ): Promise<void> {
 	await ensureDir(adapter, sessionsDir);
 	const final = sessionPath(sessionsDir, id);
@@ -82,7 +78,7 @@ export async function saveSession(
 	// prevents concurrent writers for the same id.
 	try {
 		await adapter.rename(tmp, final);
-	} catch (_renameErr) {
+	} catch {
 		if (await adapter.exists(final)) {
 			await adapter.remove(final);
 		}
@@ -92,7 +88,7 @@ export async function saveSession(
 
 export async function loadAllSessions(
 	adapter: DataAdapter,
-	sessionsDir: string = DEFAULT_SESSIONS_SUBDIR,
+	sessionsDir: string,
 ): Promise<SessionSnapshot[]> {
 	const dir = dirPath(sessionsDir);
 	if (!(await adapter.exists(dir))) return [];
@@ -106,7 +102,7 @@ export async function loadAllSessions(
 			if (isSessionSnapshot(parsed)) {
 				out.push(parsed);
 			}
-		} catch (_err) {
+		} catch {
 			// Skip unreadable/corrupt session files silently — the
 			// alternative is bricking the plugin on load.
 		}
@@ -131,7 +127,7 @@ export interface DebouncedSaver {
 
 export function debouncedSaver(
 	adapter: DataAdapter,
-	sessionsDir: string = DEFAULT_SESSIONS_SUBDIR,
+	sessionsDir: string,
 ): DebouncedSaver {
 	// Per-session timer map so saves for different sessions don't
 	// interfere. 2-second debounce matches the plan. We use

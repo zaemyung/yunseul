@@ -9,6 +9,12 @@ import {
 	type SessionSnapshot,
 } from '../src/chat/persist';
 
+// Fixture sessions directory. Production code derives this from
+// vault.configDir via util/paths#sessionsDir(plugin); these tests pass
+// a fixed path so we can assert on the exact write locations without
+// pulling in a Plugin/Vault mock.
+const TEST_SESSIONS_DIR = '.test-sessions/yunseul';
+
 interface Op {
 	kind: string;
 	path: string;
@@ -130,7 +136,7 @@ const sampleSnapshot = (id: string): SessionSnapshot => ({
 describe('saveSession', () => {
 	it('writes to a .tmp path then renames atomically', async () => {
 		const adapter = new MemoryAdapter();
-		await saveSession(adapter, 'abc', sampleSnapshot('abc'));
+		await saveSession(adapter, 'abc', sampleSnapshot('abc'), TEST_SESSIONS_DIR);
 		// Filter on the specific predicates rather than `indexOf('write')`
 		// — indexOf would pick up a stray sidecar write (e.g. a future
 		// manifest) and the test would silently pass for the wrong reason.
@@ -146,9 +152,9 @@ describe('saveSession', () => {
 
 	it('overwrites an existing session file via rename (with delete-then-rename fallback)', async () => {
 		const adapter = new MemoryAdapter();
-		await saveSession(adapter, 'abc', sampleSnapshot('abc'));
+		await saveSession(adapter, 'abc', sampleSnapshot('abc'), TEST_SESSIONS_DIR);
 		adapter.ops.length = 0;
-		await saveSession(adapter, 'abc', { ...sampleSnapshot('abc'), updatedAt: 999 });
+		await saveSession(adapter, 'abc', { ...sampleSnapshot('abc'), updatedAt: 999 }, TEST_SESSIONS_DIR);
 		const kinds = adapter.ops.map((o) => o.kind);
 		// The new strategy prefers rename-over-existing where supported.
 		// The MemoryAdapter overwrites silently so no remove is needed.
@@ -156,7 +162,7 @@ describe('saveSession', () => {
 		// And the final file reflects the new content. Use the exported
 		// path helper so the test stays in sync if the directory layout
 		// ever moves.
-		const finalPath = sessionFilePath('abc');
+		const finalPath = sessionFilePath('abc', TEST_SESSIONS_DIR);
 		const text = adapter.files.get(finalPath);
 		expect(text).toBeDefined();
 		expect(JSON.parse(text!).updatedAt).toBe(999);
@@ -173,9 +179,9 @@ describe('saveSession', () => {
 			}
 			return origRename(from, to);
 		};
-		await saveSession(adapter, 'abc', sampleSnapshot('abc'));
+		await saveSession(adapter, 'abc', sampleSnapshot('abc'), TEST_SESSIONS_DIR);
 		adapter.ops.length = 0;
-		await saveSession(adapter, 'abc', { ...sampleSnapshot('abc'), updatedAt: 999 });
+		await saveSession(adapter, 'abc', { ...sampleSnapshot('abc'), updatedAt: 999 }, TEST_SESSIONS_DIR);
 		const kinds = adapter.ops.map((o) => o.kind);
 		expect(kinds).toContain('remove');
 		expect(kinds).toContain('rename');
@@ -183,7 +189,7 @@ describe('saveSession', () => {
 
 	it('creates the sessions dir if missing', async () => {
 		const adapter = new MemoryAdapter();
-		await saveSession(adapter, 'abc', sampleSnapshot('abc'));
+		await saveSession(adapter, 'abc', sampleSnapshot('abc'), TEST_SESSIONS_DIR);
 		const kinds = adapter.ops.map((o) => o.kind);
 		expect(kinds).toContain('mkdir');
 	});
@@ -192,16 +198,16 @@ describe('saveSession', () => {
 describe('loadAllSessions', () => {
 	it('returns [] when the sessions dir does not exist', async () => {
 		const adapter = new MemoryAdapter();
-		const out = await loadAllSessions(adapter);
+		const out = await loadAllSessions(adapter, TEST_SESSIONS_DIR);
 		expect(out).toEqual([]);
 	});
 
 	it('loads previously-saved sessions and skips corrupt files', async () => {
 		const adapter = new MemoryAdapter();
-		await saveSession(adapter, 'one', sampleSnapshot('one'));
-		await saveSession(adapter, 'two', sampleSnapshot('two'));
-		adapter.files.set('.obsidian/plugins/yunseul/sessions/corrupt.json', '{not json');
-		const out = await loadAllSessions(adapter);
+		await saveSession(adapter, 'one', sampleSnapshot('one'), TEST_SESSIONS_DIR);
+		await saveSession(adapter, 'two', sampleSnapshot('two'), TEST_SESSIONS_DIR);
+		adapter.files.set(`${TEST_SESSIONS_DIR}/corrupt.json`, '{not json');
+		const out = await loadAllSessions(adapter, TEST_SESSIONS_DIR);
 		const ids = out.map((s) => s.id).sort();
 		expect(ids).toEqual(['one', 'two']);
 	});
@@ -217,7 +223,7 @@ describe('debouncedSaver', () => {
 
 	it('coalesces rapid writes into a single save after the 2s window', async () => {
 		const adapter = new MemoryAdapter();
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		const snap = sampleSnapshot('abc');
 		save('abc', snap);
 		save('abc', { ...snap, updatedAt: 300 });
@@ -232,7 +238,7 @@ describe('debouncedSaver', () => {
 
 	it('debounces independently per session id', async () => {
 		const adapter = new MemoryAdapter();
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		save('a', sampleSnapshot('a'));
 		save('b', sampleSnapshot('b'));
 		await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 100);
@@ -242,7 +248,7 @@ describe('debouncedSaver', () => {
 
 	it('flush() writes the latest pending snapshot synchronously without waiting for the debounce window', async () => {
 		const adapter = new MemoryAdapter();
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		save('abc', sampleSnapshot('abc'));
 		save('abc', { ...sampleSnapshot('abc'), updatedAt: 999 });
 		// Critically: we do NOT advance timers — flush should not depend
@@ -251,7 +257,7 @@ describe('debouncedSaver', () => {
 		const writes = adapter.ops.filter((o) => o.kind === 'write');
 		expect(writes).toHaveLength(1);
 		// The latest snapshot landed on disk.
-		const finalPath = sessionFilePath('abc');
+		const finalPath = sessionFilePath('abc', TEST_SESSIONS_DIR);
 		const text = adapter.files.get(finalPath);
 		expect(text).toBeDefined();
 		expect(JSON.parse(text!).updatedAt).toBe(999);
@@ -259,7 +265,7 @@ describe('debouncedSaver', () => {
 
 	it('flush() drains pending writes for multiple ids', async () => {
 		const adapter = new MemoryAdapter();
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		save('a', sampleSnapshot('a'));
 		save('b', sampleSnapshot('b'));
 		save('c', sampleSnapshot('c'));
@@ -270,7 +276,7 @@ describe('debouncedSaver', () => {
 
 	it('cancel() suppresses pending writes (no disk activity after the window)', async () => {
 		const adapter = new MemoryAdapter();
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		save('abc', sampleSnapshot('abc'));
 		save.cancel();
 		// Advance well past the debounce window to prove cancel() truly
@@ -282,7 +288,7 @@ describe('debouncedSaver', () => {
 
 	it('cancel() is safe to call when no pending writes exist', async () => {
 		const adapter = new MemoryAdapter();
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		// No save() calls — cancel() should be a no-op that does not throw.
 		expect(() => save.cancel()).not.toThrow();
 		await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 100);
@@ -308,7 +314,7 @@ describe('debouncedSaver', () => {
 			writeOrder.push(p);
 			return origWrite(p, d);
 		};
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		save('a', sampleSnapshot('a'));
 		save('b', sampleSnapshot('b'));
 		await save.flush();
@@ -321,7 +327,7 @@ describe('debouncedSaver', () => {
 
 	it('flush() is idempotent — calling twice does not throw or double-write', async () => {
 		const adapter = new MemoryAdapter();
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		save('abc', sampleSnapshot('abc'));
 		await save.flush();
 		// Second flush() with no work pending should resolve to a no-op
@@ -333,7 +339,7 @@ describe('debouncedSaver', () => {
 
 	it('cancel() preempts the trailing debounce — no late write fires after cancel', async () => {
 		const adapter = new MemoryAdapter();
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		save('abc', sampleSnapshot('abc'));
 		// Advance just past half the debounce window so a stale timer
 		// would still be live, then cancel.
@@ -347,7 +353,7 @@ describe('debouncedSaver', () => {
 
 	it('cancel() then save() does NOT replay the cancelled snapshot — only the new save lands', async () => {
 		const adapter = new MemoryAdapter();
-		const save = debouncedSaver(adapter);
+		const save = debouncedSaver(adapter, TEST_SESSIONS_DIR);
 		// First snapshot — content matters because we assert which one
 		// lands on disk.
 		save('abc', sampleSnapshot('abc'));
@@ -359,7 +365,7 @@ describe('debouncedSaver', () => {
 		await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 100);
 		const writes = adapter.ops.filter((o) => o.kind === 'write');
 		expect(writes).toHaveLength(1);
-		const finalPath = sessionFilePath('abc');
+		const finalPath = sessionFilePath('abc', TEST_SESSIONS_DIR);
 		const text = adapter.files.get(finalPath);
 		expect(text).toBeDefined();
 		expect(JSON.parse(text!).updatedAt).toBe(7777);

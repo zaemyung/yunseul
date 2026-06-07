@@ -523,8 +523,10 @@ export class YunseulSettingTab extends PluginSettingTab {
 						// `display()` is the documented re-render seam
 						// across Obsidian's settings tab examples; the
 						// deprecation warning points at the override
-						// pattern, not the call.
-						// eslint-disable-next-line @typescript-eslint/no-deprecated
+						// pattern, not the call. The
+						// `@typescript-eslint/no-deprecated` rule is
+						// disabled for this file via the eslint config
+						// override.
 						this.display();
 					}
 				});
@@ -703,10 +705,12 @@ export class YunseulSettingTab extends PluginSettingTab {
 			.addButton((btn) =>
 				btn
 					.setButtonText('Reset')
-					// setDestructive() is the modern API but requires Obsidian 1.13.
-					// We target minAppVersion 1.7.2 so we use the deprecated
-					// setWarning() form. Lint exemption below.
-					// eslint-disable-next-line @typescript-eslint/no-deprecated
+					// setDestructive() is the modern API but requires
+					// Obsidian 1.13. We target minAppVersion 1.7.2 so
+					// we use the deprecated setWarning() form. The
+					// `@typescript-eslint/no-deprecated` rule is
+					// disabled for this file via the eslint config
+					// override.
 					.setWarning()
 					.onClick(() => {
 						// Surface the confirmation modal rather than

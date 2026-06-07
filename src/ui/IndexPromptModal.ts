@@ -42,6 +42,10 @@ export class IndexPromptModal extends Modal {
 			'Yunseul can index your vault so the assistant can find relevant notes for every question.',
 		);
 
+		// Justification (community review): vault.getMarkdownFiles() is
+		// called only to display the file count in the consent modal so
+		// the user can see the indexing surface area BEFORE opting in.
+		// No content is read at this point; opt-in happens after this modal.
 		const fileCount = this.plugin.app.vault.getMarkdownFiles().length;
 		// Honest time estimate: a single-doc index step takes ~25 ms on a
 		// warm cache (best case) but 3-5x that on a cold disk or with

@@ -131,6 +131,7 @@ type ElProtoExt = {
 	hide: () => void;
 	show: () => void;
 	setCssStyles: (styles: Record<string, string>) => void;
+	setCssProps: (styles: Record<string, string>) => void;
 };
 
 const protoAny = HTMLElement.prototype as unknown as Partial<ElProtoExt> & HTMLElement;
@@ -185,6 +186,16 @@ if (protoAny.createDiv === undefined) {
 	protoAny.setCssStyles = function (this: HTMLElement, styles: Record<string, string>): void {
 		for (const [k, v] of Object.entries(styles)) {
 			(this.style as unknown as Record<string, string>)[k] = v;
+		}
+	};
+	// setCssProps mirrors setCssStyles but takes a Record<string,string>
+	// (matches Obsidian's signature). Used when the key is a CSS custom
+	// property (e.g. '--yunseul-bar-opacity'); route through setProperty
+	// so kebab/`--` keys land correctly rather than being assigned to a
+	// camelCase JS property.
+	protoAny.setCssProps = function (this: HTMLElement, styles: Record<string, string>): void {
+		for (const [k, v] of Object.entries(styles)) {
+			this.style.setProperty(k, v);
 		}
 	};
 }

@@ -180,6 +180,10 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 		// height (see .yunseul-textarea in styles.css). The exported
 		// resize handle is kept as a no-op so external callers don't break.
 		// Content overflows internally via CSS overflow-y: auto.
+		// DEPENDENCY: styles.css drops `!important` on the height triple-lock
+		// because nothing inline writes the textarea height anymore. If this
+		// function is ever re-enabled to set inline height, restore the
+		// !important on .yunseul-textarea or route through a CSS variable.
 	};
 
 	const setSendButtonStreaming = (streaming: boolean): void => {

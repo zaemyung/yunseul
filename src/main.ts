@@ -586,16 +586,23 @@ export default class YunseulPlugin extends Plugin {
 		const abortCtrl = new AbortController();
 		this.indexBuildAbortCtrl = abortCtrl;
 		const startedAt = Date.now();
+		// Justification (community review): vault.getMarkdownFiles() drives
+		// the BM25 retrieval index. The user must opt-in (Settings >
+		// Vault index > Enable) before the index is built; the count is
+		// also surfaced in the IndexPromptModal so the user sees the
+		// surface area before consenting. No file content leaves the
+		// device; the index is stored under .yunseul/ at vault root.
 		const total = this.app.vault.getMarkdownFiles().length;
 		const verb = reason === 'force' ? 'Rebuilding' : 'Building';
 		const notice = new Notice(`${verb} vault index... (0 / ${total})`, 0);
 		// Wire a Cancel affordance into the persistent Notice. The X
 		// glyph rendered by Obsidian for `new Notice(..., 0)` only
 		// hides the toast; a real cancel must abort the build loop.
-		// We use `noticeEl` (the deprecated alias of `messageEl`) because
-		// `messageEl` requires Obsidian 1.8.7 and our minAppVersion is
-		// 1.7.2. Lint exemption below.
-		// eslint-disable-next-line @typescript-eslint/no-deprecated
+		// We use `noticeEl` (the deprecated alias of `messageEl`)
+		// because `messageEl` requires Obsidian 1.8.7 and our
+		// minAppVersion is 1.7.2. The
+		// `@typescript-eslint/no-deprecated` rule is disabled for
+		// this file via the eslint config override.
 		const noticeEl = notice.noticeEl;
 		let cancelBtn: HTMLButtonElement | null = null;
 		if (noticeEl !== undefined) {

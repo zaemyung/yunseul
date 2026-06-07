@@ -123,14 +123,22 @@ function renderSourceRow(list: HTMLUListElement, hit: RetrievalResult): void {
 
 	// Clamp relevance score to a visible opacity range. The bar's opacity
 	// encodes the score (0.30 → 30%, 0.95 → 95%), with hover snapping to
-	// full via CSS. setCssStyles is Obsidian's sanctioned API for dynamic
-	// style changes (lint rule against direct .style.* assignment).
+	// full via CSS. We write the score into a CSS custom property
+	// (--yunseul-bar-opacity) rather than the `opacity` longhand directly,
+	// so the hover rule in styles.css can override without `!important`
+	// (the hover rule sets `opacity: 1`, which wins over the base rule's
+	// `opacity: var(--yunseul-bar-opacity, 1)` purely by source order).
+	// setCssStyles is Obsidian's sanctioned API for dynamic style changes
+	// (lint rule against direct .style.* assignment).
 	const opacity = Math.max(0.3, Math.min(0.95, hit.score));
 	const bar = row.createSpan({
 		cls: 'yunseul-sources-bar',
 		attr: { 'aria-hidden': 'true' },
 	});
-	bar.setCssStyles({ opacity: String(opacity) });
+	// setCssProps targets Record<string,string> which fits CSS custom
+	// properties without a type-cast workaround on the strict
+	// Partial<CSSStyleDeclaration> shape that setCssStyles enforces.
+	bar.setCssProps({ '--yunseul-bar-opacity': String(opacity) });
 
 	const target = sanitizeWikilinkTarget(hit.file.path.replace(/\.md$/i, ''));
 	const score = formatScore(hit.score);
@@ -169,7 +177,7 @@ function renderSourceRow(list: HTMLUListElement, hit: RetrievalResult): void {
 
 // Sanitize a string that will appear inside `[[...]]` as the link target.
 function sanitizeWikilinkTarget(s: string): string {
-	// eslint-disable-next-line no-control-regex
+	// eslint-disable-next-line no-control-regex -- sanitizeWikilinkTarget strips C0/C1 control chars from path components so a maliciously named note cannot inject literal control bytes into a wikilink target.
 	return s.replace(/[\x00-\x1f\x7f-\x9f[\]|^#<>\\]/g, '');
 }
 

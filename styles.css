@@ -683,10 +683,16 @@
 	background: var(--yunseul-accent);
 	align-self: stretch;
 	flex: 0 0 auto;
+	/* The opacity is driven by --yunseul-bar-opacity (set inline from
+	 * SourcesBlock.ts, encoding the BM25 score). Hover rule below
+	 * snaps to fully opaque via plain `opacity: 1` — wins purely on
+	 * source order because nothing inline targets `opacity` directly,
+	 * which is why no !important is required. */
+	opacity: var(--yunseul-bar-opacity, 1);
 }
 
 .yunseul-sources-row:hover .yunseul-sources-bar {
-	opacity: 1 !important;
+	opacity: 1;
 }
 
 .yunseul-sources-name {
@@ -792,13 +798,15 @@
 	resize: none;
 	/* Fixed-height: textarea no longer auto-grows on typing, which
 	 * was pushing the strip/context down and making the bottom of
-	 * the composer "grow". !important needed because ChatComposer's
-	 * resize() sets inline `style="height: NNNpx"` on every keystroke
-	 * and inline beats external CSS in the cascade. Content overflows
-	 * internally now. */
-	height: 72px !important;
-	min-height: 72px !important;
-	max-height: 72px !important;
+	 * the composer "grow". ChatComposer's resize() is a no-op so no
+	 * inline `style="height: NNNpx"` competes with these declarations
+	 * (see src/ui/ChatComposer.ts resize()). Content overflows
+	 * internally via overflow-y: auto. If resize() is ever re-enabled
+	 * to auto-grow, route writes through a CSS variable / class
+	 * toggle so this lock keeps working. */
+	height: 72px;
+	min-height: 72px;
+	max-height: 72px;
 	font-family: var(--font-text);
 	font-size: 13.5px;
 	line-height: 1.55;
