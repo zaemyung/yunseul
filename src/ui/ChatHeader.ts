@@ -24,6 +24,7 @@ export interface ChatHeaderOptions {
 	plugin: YunseulPlugin;
 	onNewChat: () => void;
 	onExport: () => void;
+	onDeleteChat: () => void;
 	onCopyAll: () => void;
 	onRetryConnection: () => void;
 	/**
@@ -92,6 +93,15 @@ export function renderChatHeader(opts: ChatHeaderOptions): ChatHeaderHandle {
 	});
 	opts.component.registerDomEvent(exportBtn, 'click', () => {
 		opts.onExport();
+	});
+
+	const deleteBtn = actions.createEl('button', {
+		cls: 'yunseul-header-btn yunseul-header-btn-danger',
+		text: 'Delete',
+		attr: { 'aria-label': 'Delete this chat and return to the start page' },
+	});
+	opts.component.registerDomEvent(deleteBtn, 'click', () => {
+		opts.onDeleteChat();
 	});
 
 	const moreBtn = actions.createEl('button', {

@@ -289,6 +289,15 @@
 	outline-offset: 2px;
 }
 
+/* Destructive header action ("Delete"). Reads as a neutral button at rest
+ * so it doesn't shout in the header row; the error color only surfaces on
+ * hover/focus to signal the consequence right before the click. */
+.yunseul-header-btn-danger:hover {
+	background: var(--background-modifier-error-hover, var(--background-modifier-hover));
+	color: var(--text-error);
+	border-color: var(--text-error);
+}
+
 /* Status strip — machine-console readout. Promoted from --text-faint
  * to --text-muted (with weight 500) so it meets AA on Minimal/AnuPpuccin. */
 .yunseul-status-strip {
@@ -1218,6 +1227,17 @@
 .yunseul-notice-cancel {
 	margin-left: 8px;
 	padding: 2px 8px;
+}
+
+/* Ribbon glyph: the ✨ emoji stands in for the sidebar "Open chat" icon.
+ * Sized to sit on the same baseline grid as Obsidian's native SVG ribbon
+ * icons; line-height:1 keeps the emoji vertically centered in the button. */
+.yunseul-ribbon-emoji {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 16px;
+	line-height: 1;
 }
 
 /* ============================================================

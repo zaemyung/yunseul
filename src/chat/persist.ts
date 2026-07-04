@@ -123,6 +123,15 @@ export interface DebouncedSaver {
 	 * disabling the plugin and discarding unsaved state is acceptable.
 	 */
 	cancel: () => void;
+	/**
+	 * Drop any pending debounced write for a SINGLE session id (its timer
+	 * and queued snapshot) and await an in-flight write for that id if one
+	 * is mid-flight. Callers deleting a session MUST await this before
+	 * removing the file — otherwise a queued or in-flight save could
+	 * re-create the file microseconds after the delete. Resolves
+	 * immediately when nothing is pending or in flight for the id.
+	 */
+	drop: (id: string) => Promise<void>;
 }
 
 export function debouncedSaver(
@@ -208,6 +217,26 @@ export function debouncedSaver(
 		for (const t of timers.values()) window.clearTimeout(t);
 		timers.clear();
 		pending.clear();
+	};
+
+	save.drop = async (id: string): Promise<void> => {
+		const t = timers.get(id);
+		if (t !== undefined) {
+			window.clearTimeout(t);
+			timers.delete(id);
+		}
+		pending.delete(id);
+		// A write may already be executing for this id; await it so the
+		// caller's subsequent file removal wins the race.
+		const inflight = inFlight.get(id);
+		if (inflight !== undefined) {
+			try {
+				await inflight;
+			} catch {
+				// The write chain already swallows/logs its own failures;
+				// we only need to know it has settled.
+			}
+		}
 	};
 
 	return save;

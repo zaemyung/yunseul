@@ -18,6 +18,8 @@ import {
 	type SourcesKey,
 } from './SourcesBlock';
 import { renderEmptyState, type EmptyStateHandle } from './EmptyState';
+import { YUNSEUL_LOGO_DATA_URI } from './logoAsset';
+import { DeleteChatConfirmModal } from './DeleteChatConfirmModal';
 import { handleAppend } from './AppendFlow';
 import { renderChatHeader, type ChatHeaderHandle } from './ChatHeader';
 import { renderChatComposer, type ChatComposerHandle } from './ChatComposer';
@@ -114,6 +116,7 @@ export class AIChatView extends ItemView {
 			plugin: this.plugin,
 			onNewChat: () => void this.startNewSession(),
 			onExport: () => void this.downloadConversation(),
+			onDeleteChat: () => this.confirmDeleteCurrentSession(),
 			onCopyAll: () => void this.copyAll(),
 			onRetryConnection: () => void this.retryConnection(),
 			onBannerFocusEscaped: () => this.composerHandle?.focus(),
@@ -270,12 +273,11 @@ export class AIChatView extends ItemView {
 			suggestions: this.plugin.settings.chat.suggestions,
 			pluginVersion: this.plugin.manifest.version,
 			slashHintId: this.slashHintId,
-			// Logo lives at <plugin-dir>/assets/logo.png. getResourcePath()
-			// returns a webview-safe `app://` URL that the renderer is
-			// allowed to fetch. Falls back to null if the adapter is the
-			// non-FileSystem variant (mobile), in which case the empty
-			// state just renders without the brand mark.
-			logoUrl: this.resolveLogoUrl(),
+			// The brand mark is embedded as a data URI (see logoAsset.ts).
+			// Releases ship only main.js/manifest.json/styles.css, so the
+			// repo's assets/logo.png is absent in a real install; inlining
+			// keeps the hero figure self-contained across install methods.
+			logoUrl: YUNSEUL_LOGO_DATA_URI,
 			onSuggestionPick: (text) => this.applySuggestion(text),
 			onUnbindBoundFile: () => {
 				// CONTRACT (EmptyState.ts): all four side effects in order.
@@ -289,20 +291,6 @@ export class AIChatView extends ItemView {
 		// wiring, set immediately after renderEmptyState and removed at
 		// renderHistoryFor / send so the attr never dangles.
 		this.composerHandle?.setSlashHintDescribedBy(true);
-	}
-
-	private resolveLogoUrl(): string | null {
-		// Resolve assets/logo.png as a webview-safe URL. Path is relative
-		// to the vault root: `.obsidian/plugins/<id>/assets/logo.png`.
-		// Using the plugin's manifest.dir keeps this id-rename-safe.
-		const dir = this.plugin.manifest.dir;
-		if (dir === undefined || dir === '') return null;
-		const rel = `${dir}/assets/logo.png`;
-		try {
-			return this.app.vault.adapter.getResourcePath(rel);
-		} catch {
-			return null;
-		}
 	}
 
 	private applySuggestion(text: string): void {
@@ -445,6 +433,52 @@ export class AIChatView extends ItemView {
 			this.sending = false;
 			new Notice('Previous reply cancelled — starting new session.');
 		}
+		this.mountFreshSession();
+	}
+
+	/**
+	 * Delete the active chat, then return the user to the "main page"
+	 * (empty-state hero). An empty chat is discarded silently; a chat with
+	 * history gets a confirmation first so a stray header click can't wipe
+	 * a conversation.
+	 */
+	private confirmDeleteCurrentSession(): void {
+		const current = this.getActiveSession();
+		if (current === undefined) return;
+		if (current.history.length === 0) {
+			void this.deleteCurrentSession();
+			return;
+		}
+		new DeleteChatConfirmModal(this.app, {
+			messageCount: current.history.length,
+			onConfirm: () => void this.deleteCurrentSession(),
+		}).open();
+	}
+
+	private async deleteCurrentSession(): Promise<void> {
+		const current = this.getActiveSession();
+		if (current === undefined) return;
+		// Same streaming-teardown invariant as startNewSession: stop the
+		// stream and reset the streaming UI before the active session goes
+		// away, or the pulse/send-button would dangle on a dead session.
+		if (current.isStreaming()) {
+			current.stop();
+			this.activeThrottle?.cancel();
+			this.activeThrottle = null;
+			this.setStreamingUI(false);
+			this.sending = false;
+		}
+		await this.plugin.deleteSession(current.id);
+		// Land on the main page: a fresh empty session renders the empty-
+		// state hero (logo + tagline + suggestions).
+		this.mountFreshSession();
+		new Notice('Chat deleted.');
+	}
+
+	// Create a brand-new session, make it active, and render it. The new
+	// session has no history, so renderHistoryFor mounts the empty state —
+	// this is the shared tail for both "New chat" and post-delete flows.
+	private mountFreshSession(): void {
 		const newId = this.plugin.createSession();
 		this.activeSessionId = newId;
 		this.plugin.setActiveSessionId(newId);

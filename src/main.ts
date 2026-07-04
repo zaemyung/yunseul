@@ -1,4 +1,4 @@
-import { addIcon, Notice, Plugin, type TAbstractFile, TFile, type WorkspaceLeaf } from 'obsidian';
+import { Notice, Plugin, type TAbstractFile, TFile, type WorkspaceLeaf } from 'obsidian';
 import {
 	migrateSettingsWithFlag,
 	YunseulSettingTab,
@@ -13,7 +13,12 @@ import { AIChatView, VIEW_TYPE_AI_CHAT } from './ui/AIChatView';
 import { IndexPromptModal } from './ui/IndexPromptModal';
 import { ResetIndexConfirmModal } from './ui/ResetIndexConfirmModal';
 import { ChatSession } from './chat/session';
-import { debouncedSaver, loadAllSessions, type DebouncedSaver } from './chat/persist';
+import {
+	debouncedSaver,
+	loadAllSessions,
+	sessionFilePath,
+	type DebouncedSaver,
+} from './chat/persist';
 import { makeLog, type Logger } from './util/log';
 import { bm25IndexPath, sessionsDir } from './util/paths';
 import { VaultRetriever } from './index/retriever';
@@ -69,16 +74,20 @@ export default class YunseulPlugin extends Plugin {
 		this.lmClient = makeLLMClient(this);
 		this.saveSession = debouncedSaver(this.app.vault.adapter, sessionsDir(this));
 
-		// addIcon is Obsidian's documented icon-registry API; its SVG string
-		// is owned by Obsidian, not plugin DOM. All other icon usage in this
-		// plugin goes through setIcon(name) helper.
-		addIcon(
-			'yunseul',
-			'<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" focusable="false" aria-hidden="true"><rect x="1" y="3" width="14" height="10" rx="2" stroke-width="1.5"/><path d="M2 12 L14 4" stroke-width="1.5" opacity="0.6"/></svg>',
-		);
-
-		this.addRibbonIcon('yunseul', 'Open chat', () => {
+		// The ribbon entry carries Yunseul's mark as the ✨ sparkle emoji
+		// (윤슬 = sunlight sparkling on water). Obsidian renders an SVG glyph
+		// for the ribbon by default; we replace it with the emoji so the
+		// "Open chat" action reads at a glance in the sidebar. `sparkles` is
+		// passed as the initial icon name only so the button is well-formed
+		// before we swap in the emoji span.
+		const ribbonEl = this.addRibbonIcon('sparkles', 'Open chat', () => {
 			void this.activateView();
+		});
+		ribbonEl.empty();
+		ribbonEl.createSpan({
+			cls: 'yunseul-ribbon-emoji',
+			text: '✨',
+			attr: { 'aria-hidden': 'true' },
 		});
 
 		this.registerView(VIEW_TYPE_AI_CHAT, (leaf: WorkspaceLeaf) => new AIChatView(leaf, this));
@@ -310,6 +319,41 @@ export default class YunseulPlugin extends Plugin {
 
 	setActiveSessionId(id: string): void {
 		this.activeSessionId = id;
+	}
+
+	/**
+	 * Permanently delete a session: abort any in-flight stream, drop it
+	 * from the in-memory map, and remove its on-disk snapshot. If the
+	 * deleted session was active, `activeSessionId` is cleared so the next
+	 * `getOrCreateActiveSessionId()` falls back cleanly. The view is
+	 * responsible for landing the user somewhere afterwards (see
+	 * AIChatView.deleteCurrentSession → the empty-state "main page").
+	 */
+	async deleteSession(id: string): Promise<void> {
+		const session = this.sessions.get(id);
+		if (session === undefined) return;
+		// Abort any in-flight stream so no tokens (or a subprocess close
+		// handler) land after we've removed the session.
+		session.stop();
+		this.sessions.delete(id);
+		if (this.activeSessionId === id) this.activeSessionId = null;
+		// Drop any queued/in-flight debounced write for this id BEFORE the
+		// remove() below, or a late save would resurrect the file.
+		if (this.saveSession !== null) {
+			await this.saveSession.drop(id);
+		}
+		const path = sessionFilePath(id, sessionsDir(this));
+		const adapter = this.app.vault.adapter;
+		try {
+			if (await adapter.exists(path)) {
+				await adapter.remove(path);
+			}
+		} catch (e) {
+			this.logger.error(
+				`Failed to remove session file: ${e instanceof Error ? e.message : String(e)}`,
+				'Could not delete the chat. See console for details.',
+			);
+		}
 	}
 
 	persistSession(session: ChatSession): void {
