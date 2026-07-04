@@ -365,10 +365,6 @@ export function renderMessageBubble(
 		tokensEl.createSpan({ text: '→', attr: { 'aria-hidden': 'true' } });
 		const outEl = tokensEl.createSpan({ cls: 'yunseul-tnum', text: formatNumber(info.output) });
 		tokensEl.createSpan({ text: ' tok' });
-		if (info.costUsd !== undefined) {
-			tokensEl.createSpan({ text: ' · ', attr: { 'aria-hidden': 'true' } });
-			tokensEl.createSpan({ text: `$${info.costUsd.toFixed(4)}` });
-		}
 		// Mark child refs as used so the lint pass doesn't trip; both are
 		// assigned-not-read because the visible chars come from setText.
 		void inEl;

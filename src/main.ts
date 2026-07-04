@@ -74,20 +74,11 @@ export default class YunseulPlugin extends Plugin {
 		this.lmClient = makeLLMClient(this);
 		this.saveSession = debouncedSaver(this.app.vault.adapter, sessionsDir(this));
 
-		// The ribbon entry carries Yunseul's mark as the ✨ sparkle emoji
-		// (윤슬 = sunlight sparkling on water). Obsidian renders an SVG glyph
-		// for the ribbon by default; we replace it with the emoji so the
-		// "Open chat" action reads at a glance in the sidebar. `sparkles` is
-		// passed as the initial icon name only so the button is well-formed
-		// before we swap in the emoji span.
-		const ribbonEl = this.addRibbonIcon('sparkles', 'Open chat', () => {
+		// The ribbon "Open chat" action uses the same `sparkles` mark as the
+		// chat view's tab icon (AIChatView.getIcon) so the sidebar entry and
+		// the open view read as one feature — 윤슬 = sunlight sparkling on water.
+		this.addRibbonIcon('sparkles', 'Open chat', () => {
 			void this.activateView();
-		});
-		ribbonEl.empty();
-		ribbonEl.createSpan({
-			cls: 'yunseul-ribbon-emoji',
-			text: '✨',
-			attr: { 'aria-hidden': 'true' },
 		});
 
 		this.registerView(VIEW_TYPE_AI_CHAT, (leaf: WorkspaceLeaf) => new AIChatView(leaf, this));
