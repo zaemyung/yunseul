@@ -1,6 +1,6 @@
 {
 	"name": "yunseul",
-	"version": "0.1.3",
+	"version": "0.1.4",
 	"description": "Yunseul (윤슬) — chat with your Obsidian vault using LM Studio or Claude Code.",
 	"main": "main.js",
 	"type": "module",
