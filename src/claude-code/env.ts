@@ -10,6 +10,21 @@
 // tests cover this via spawn-call inspection (see
 // tests/claude-code.test.ts 'env hardening (regression)' describe).
 
+import type { EnvMap } from './io';
+
+/**
+ * Narrow, explicitly-typed view of the global `process`. We declare the
+ * two members we consume (env, platform) instead of leaning on
+ * NodeJS.Process so this module — and everything downstream of
+ * buildSafeEnv() — stays fully typed even in lint environments without
+ * @types/node (the community plugin review lints without it).
+ */
+interface ProcessView {
+	env: EnvMap;
+	platform: string;
+}
+const nodeProcess = process as ProcessView;
+
 // Minimal env allowlist for the subprocess.
 export const SAFE_ENV_VARS: ReadonlySet<string> = new Set([
 	'PATH',
@@ -54,15 +69,15 @@ export const SAFE_ENV_PREFIXES: readonly string[] = [
 	'VERTEX_',
 ];
 
-export function buildSafeEnv(): NodeJS.ProcessEnv {
+export function buildSafeEnv(): EnvMap {
 	// Justification (community review): we read process.env to construct
 	// the SAFE_ENV subset the Claude Code CLI subprocess inherits. The
 	// renderer's full env contains Electron internals and unrelated
 	// credentials the CLI does not need; the allowlist + ELECTRON_* strip
 	// is a hardening measure, NOT identity collection. No env data leaves
 	// the user machine; it is handed to a locally-spawned subprocess only.
-	const out: NodeJS.ProcessEnv = {};
-	const src = process.env;
+	const out: EnvMap = {};
+	const src = nodeProcess.env;
 	for (const key of Object.keys(src)) {
 		const v = src[key];
 		if (v === undefined) continue;
@@ -97,8 +112,8 @@ export function augmentPath(existing: string | undefined): string {
 	// leave the user machine — they become PATH segments handed to a
 	// locally-spawned subprocess so the `claude` binary is discoverable
 	// when Electron launches from Finder/Dock with a stripped PATH.
-	const sep = process.platform === 'win32' ? ';' : ':';
-	const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
+	const sep = nodeProcess.platform === 'win32' ? ';' : ':';
+	const home = nodeProcess.env.HOME ?? nodeProcess.env.USERPROFILE ?? '';
 	const additions = [
 		'/opt/homebrew/bin',          // Apple Silicon Homebrew
 		'/opt/homebrew/sbin',

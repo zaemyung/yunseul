@@ -9,10 +9,9 @@
 // randomUUID() variant from claude-code/client.ts so collision-paradox
 // windows close and the sysprompt symlink-prediction surface narrows.
 //
-// Pure module — depends on Node's `crypto` built-in (Electron renderer
-// exposes it; esbuild's `builtinModules` external list keeps it out of
-// the bundle). No Obsidian import. Safe to import from anywhere in src/.
-import { randomUUID } from 'crypto';
+// Pure module — no Node or Obsidian imports at all (randomUUID comes
+// from the Web Crypto global, available on every supported Obsidian
+// version). Safe to import from anywhere in src/.
 
 /**
  * True iff the value is a non-null object. Used as a guard before
@@ -41,11 +40,11 @@ export function isAbortError(e: unknown): boolean {
 /**
  * Cryptographically-random short id. Used as a nonce in tmp-file
  * filenames (chat/persist.ts, index/retriever.ts, claude-code/client.ts).
- * crypto.randomUUID() is available on all supported Obsidian versions
- * (Electron ≥ 24) and eliminates the collision-paradox window that the
- * previous Math.random()-based variants opened when multiple writers
- * fired in the same tick.
+ * Web Crypto's crypto.randomUUID() is available on all supported
+ * Obsidian versions (Electron ≥ 24 / Chrome ≥ 92) and eliminates the
+ * collision-paradox window that the previous Math.random()-based
+ * variants opened when multiple writers fired in the same tick.
  */
 export function makeNonce(): string {
-	return randomUUID();
+	return crypto.randomUUID();
 }

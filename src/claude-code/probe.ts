@@ -14,7 +14,7 @@
 // probes too (e.g. user clicked Test then disabled the plugin before
 // the probe resolved).
 
-import type { ChildProcess } from 'child_process';
+import type { EnvMap, SpawnedProc, SpawnError } from './io';
 import { PROBE_TIMEOUT_MS } from './constants';
 import type { LiveProc } from './lifecycle';
 import type { ProbeResult } from '../llm/types';
@@ -28,13 +28,13 @@ export interface ProbeIO {
 	spawn: (
 		cmd: string,
 		args: string[],
-		opts: { cwd: string; env: NodeJS.ProcessEnv },
-	) => ChildProcess;
+		opts: { cwd: string; env: EnvMap },
+	) => SpawnedProc;
 }
 
 export interface ProbeDeps {
 	io: ProbeIO;
-	env: NodeJS.ProcessEnv;
+	env: EnvMap;
 	/**
 	 * cwd for the spawn. The streaming path uses vaultBasePath, but the
 	 * probe path uses process.cwd() — `claude --version` doesn't need the
@@ -60,7 +60,7 @@ export interface ProbeDeps {
  */
 export async function probeBinary(deps: ProbeDeps, binary: string): Promise<ProbeResult> {
 	return new Promise<ProbeResult>((resolve) => {
-		let proc: ChildProcess;
+		let proc: SpawnedProc;
 		try {
 			proc = deps.io.spawn(binary, ['--version'], {
 				cwd: deps.cwd,
@@ -111,13 +111,17 @@ export async function probeBinary(deps: ProbeDeps, binary: string): Promise<Prob
 			});
 		}, PROBE_TIMEOUT_MS);
 
-		proc.stdout?.on('data', (chunk: Buffer | string) => {
-			stdout += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+		// Streaming decoders (one per stream) so a multi-byte UTF-8
+		// sequence split across chunk boundaries still decodes cleanly.
+		const stdoutDecoder = new TextDecoder();
+		const stderrDecoder = new TextDecoder();
+		proc.stdout?.on('data', (chunk: Uint8Array | string) => {
+			stdout += typeof chunk === 'string' ? chunk : stdoutDecoder.decode(chunk, { stream: true });
 		});
-		proc.stderr?.on('data', (chunk: Buffer | string) => {
-			stderr += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+		proc.stderr?.on('data', (chunk: Uint8Array | string) => {
+			stderr += typeof chunk === 'string' ? chunk : stderrDecoder.decode(chunk, { stream: true });
 		});
-		proc.on('error', (err: NodeJS.ErrnoException) => {
+		proc.on('error', (err: SpawnError) => {
 			if (err.code === 'ENOENT') {
 				settle({
 					ok: false,

@@ -199,7 +199,7 @@ function buildNdjsonBuffer(
 function logStderrLines(
 	plugin: YunseulPlugin,
 	decoder: TextDecoder,
-	chunk: Buffer | string,
+	chunk: Uint8Array | string,
 ): void {
 	// Surface each stderr line to the logger gated on warn. We don't
 	// promote stderr to an error eagerly — the CLI emits non-fatal

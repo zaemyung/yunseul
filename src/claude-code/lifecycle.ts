@@ -11,7 +11,7 @@
 // onStdout/onTerminate callbacks we accept here, and unlinks the temp
 // sysprompt file inside onTerminate.
 
-import type { ChildProcess } from 'child_process';
+import type { EnvMap, SpawnedProc, SpawnError } from './io';
 import { SIGTERM_TO_SIGKILL_MS, STDERR_BUFFER_MAX } from './constants';
 
 /** Subset of ClaudeCodeIO needed by the lifecycle. */
@@ -19,8 +19,8 @@ export interface SubprocessIO {
 	spawn: (
 		cmd: string,
 		args: string[],
-		opts: { cwd: string; env: NodeJS.ProcessEnv },
-	) => ChildProcess;
+		opts: { cwd: string; env: EnvMap },
+	) => SpawnedProc;
 }
 
 /**
@@ -43,8 +43,8 @@ export type LifecycleOutcome =
 	| { kind: 'exit-error'; exitCode: number | null; stderrTail: string };
 
 export interface LifecycleHandlers {
-	onStdout: (chunk: Buffer | string) => void;
-	onStderr: (chunk: Buffer | string) => void;
+	onStdout: (chunk: Uint8Array | string) => void;
+	onStderr: (chunk: Uint8Array | string) => void;
 	/** Fired exactly once when the subprocess settles (or fails to spawn). */
 	onTerminate: (outcome: LifecycleOutcome) => void;
 	/** EPIPE is swallowed silently; non-EPIPE stdin errors surface here. */
@@ -57,7 +57,7 @@ export interface LifecycleHandlers {
  * the liveProcs Set; we just signal entry/exit lifetime.
  */
 export interface LiveProc {
-	proc: ChildProcess;
+	proc: SpawnedProc;
 	markAborted: () => void;
 }
 
@@ -65,7 +65,7 @@ export interface LifecycleArgs {
 	binary: string;
 	args: string[];
 	cwd: string;
-	env: NodeJS.ProcessEnv;
+	env: EnvMap;
 	signal: AbortSignal;
 	stdinPayload: string;
 }
@@ -97,7 +97,7 @@ export function runSubprocess(
 		let settled = false;
 		let aborted = false;
 
-		let proc: ChildProcess;
+		let proc: SpawnedProc;
 		try {
 			proc = io.spawn(args.binary, args.args, {
 				cwd: args.cwd,
@@ -153,12 +153,12 @@ export function runSubprocess(
 			args.signal.addEventListener('abort', onAbort, { once: true });
 		}
 
-		proc.stdout?.on('data', (chunk: Buffer | string) => {
+		proc.stdout?.on('data', (chunk: Uint8Array | string) => {
 			if (settled) return;
 			handlers.onStdout(chunk);
 		});
 
-		proc.stderr?.on('data', (chunk: Buffer | string) => {
+		proc.stderr?.on('data', (chunk: Uint8Array | string) => {
 			if (settled) return;
 			// Cap the buffer — keep the tail since the last error is
 			// usually the relevant one. A misbehaving CLI that spams
@@ -168,7 +168,7 @@ export function runSubprocess(
 			if (stderrBuf.length > STDERR_BUFFER_MAX) {
 				stderrBuf = stderrBuf.slice(-STDERR_BUFFER_MAX);
 			}
-			// Pass the original (Buffer | string) chunk to the
+			// Pass the original (Uint8Array | string) chunk to the
 			// orchestrator so the callback signature stays uniform;
 			// the orchestrator decodes again with its own TextDecoder.
 			handlers.onStderr(chunk);
@@ -182,7 +182,7 @@ export function runSubprocess(
 			resolve();
 		};
 
-		proc.on('error', (err: NodeJS.ErrnoException) => {
+		proc.on('error', (err: SpawnError) => {
 			// `error` fires before `close` when the spawn itself failed
 			// (binary missing, ENOEXEC). The settled latch makes sure
 			// the user only sees one terminal callback.
@@ -213,7 +213,7 @@ export function runSubprocess(
  * setter for the timer handle so cleanup() can clear it.
  */
 function killWithEscalation(
-	proc: ChildProcess,
+	proc: SpawnedProc,
 	setTimer: (timer: number) => void,
 ): void {
 	try {
@@ -253,13 +253,13 @@ function killWithEscalation(
  * returns, which the listener above catches.
  */
 function pumpStdin(
-	proc: ChildProcess,
+	proc: SpawnedProc,
 	payload: string,
 	onStdinError: (message: string) => void,
 ): void {
 	const stdin = proc.stdin;
 	if (stdin === null) return;
-	stdin.on('error', (e: NodeJS.ErrnoException) => {
+	stdin.on('error', (e: SpawnError) => {
 		if (e.code !== 'EPIPE') {
 			onStdinError(e.message);
 		}

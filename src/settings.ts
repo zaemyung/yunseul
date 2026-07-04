@@ -607,7 +607,6 @@ export class YunseulSettingTab extends PluginSettingTab {
 				slider
 					.setLimits(1, 20, 1)
 					.setValue(this.plugin.settings.lmStudio.maxConversationRounds)
-					.setDynamicTooltip()
 					.onChange(async (v) => {
 						this.plugin.settings.lmStudio.maxConversationRounds = v;
 						await this.plugin.saveSettings();
@@ -661,7 +660,6 @@ export class YunseulSettingTab extends PluginSettingTab {
 				slider
 					.setLimits(1, 20, 1)
 					.setValue(this.plugin.settings.index.topK)
-					.setDynamicTooltip()
 					.onChange(async (v) => {
 						this.plugin.settings.index.topK = v;
 						await this.plugin.saveSettings();

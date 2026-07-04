@@ -19,8 +19,15 @@
 // (vault-relative, plugin-owned) is unavailable. No identifying data is
 // read from `os`; the path is handed to a locally-spawned subprocess.
 import { tmpdir } from 'os';
-import { join as joinPath } from 'path';
+import { join } from 'path';
 import { makeNonce } from '../util/guards';
+
+// Typed pins for the two node helpers this module consumes. The explicit
+// annotations keep every downstream path expression fully typed even in
+// lint environments without @types/node (the community plugin review
+// lints without it).
+const joinPath: (...parts: string[]) => string = join;
+const osTmpdir: () => string = tmpdir;
 
 /**
  * Subset of ClaudeCodeIO needed by the sysprompt writer. We accept a
@@ -79,7 +86,7 @@ export async function writeSysPromptFile(
 		// sanitizeForFilename + the literal prefix; no normalizePath
 		// needed (and normalizePath is for vault-relative paths anyway,
 		// not OS paths).
-		const absFile = joinPath(tmpdir(), fileName);
+		const absFile = joinPath(osTmpdir(), fileName);
 		await deps.io.writeFile(absFile, systemPrompt);
 		return absFile;
 	}

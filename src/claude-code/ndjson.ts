@@ -82,7 +82,7 @@ export class NdjsonBuffer {
 	 * emitted them — critical for the regression test that asserts
 	 * `tokens.equal(['Hello', ' world'])` on multi-chunk dispatch.
 	 */
-	push(chunk: Buffer | string): void {
+	push(chunk: Uint8Array | string): void {
 		if (this.closed) return;
 		const text = typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, { stream: true });
 		this.buf += text;
