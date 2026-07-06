@@ -700,18 +700,20 @@ export class YunseulSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Reset index')
 			.setDesc('Removes the index file and disables vault search. Re-enable to rebuild.')
-			.addButton((btn) =>
+			.addButton((btn) => {
 				btn
 					.setButtonText('Reset')
-					// setDestructive() is the current API (added in
-					// Obsidian 1.13.0, covered by our minAppVersion).
-					.setDestructive()
 					.onClick(() => {
 						// Surface the confirmation modal rather than
 						// destroying the index on a single mis-click.
 						this.plugin.promptResetVaultIndex();
-					}),
-			);
+					});
+				// `mod-warning` applies Obsidian's destructive (red) button
+				// styling directly. Preferred over ButtonComponent#setDestructive(),
+				// which requires 1.13+ and would gate out every stable-channel
+				// user; this keeps minAppVersion at 1.8.7.
+				btn.buttonEl.addClass('mod-warning');
+			});
 
 		// ---- Privacy section ----------------------------------------------
 		this.heading(containerEl, 'Privacy');
