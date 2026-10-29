@@ -54,4 +54,11 @@ export const PROBE_TIMEOUT_MS = 10_000;
 // chars can include the punctuation set we tolerate. We use two
 // alternatives: a single char OR (first-char then up-to-127 tail chars).
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})$/;
-export const MODEL_OVERRIDE_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:/-]{0,127})$/;
+// Square brackets are allowed because Claude Code's own aliases include
+// them (`sonnet[1m]`, `opus[1m]`). Spawn passes argv without a shell, so
+// they carry no glob meaning here.
+export const MODEL_OVERRIDE_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:/[\]-]{0,127})$/;
+// Effort levels are short lowercase words (`low` … `xhigh`, `max`). The
+// user-facing validation against each provider's list lives in
+// chat/localCommands.ts; this is the argv-safety floor.
+export const EFFORT_PATTERN = /^[a-z]{1,16}$/;

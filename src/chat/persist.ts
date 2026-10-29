@@ -21,6 +21,16 @@ export interface SessionSnapshot {
 	 * with the field absent and ChatSession defaults it to null.
 	 */
 	claudeCodeSessionId?: string | null;
+	/** Codex thread id for `codex exec resume`. Same optionality rules. */
+	codexThreadId?: string | null;
+	/**
+	 * Per-chat `/model` and `/effort` overrides. Absent on snapshots
+	 * written before the fields existed; null when never set or reset.
+	 */
+	modelOverride?: string | null;
+	effortOverride?: string | null;
+	/** Provider the overrides were set under; they are inert for any other. */
+	overrideProvider?: string | null;
 	history: ChatMessage[];
 }
 
@@ -249,14 +259,13 @@ function isSessionSnapshot(x: unknown): x is SessionSnapshot {
 	if (typeof r.createdAt !== 'number') return false;
 	if (typeof r.updatedAt !== 'number') return false;
 	if (r.boundFilePath !== null && typeof r.boundFilePath !== 'string') return false;
-	// claudeCodeSessionId is optional. Accept undefined (older
-	// snapshots), null (explicitly cleared), or a string (live).
-	if (
-		r.claudeCodeSessionId !== undefined &&
-		r.claudeCodeSessionId !== null &&
-		typeof r.claudeCodeSessionId !== 'string'
-	) {
-		return false;
+	// Backend handles and per-chat overrides are optional. Accept
+	// undefined (older snapshots), null (explicitly cleared), or a string
+	// (live); reject anything else so a corrupt file cannot smuggle a
+	// non-string into argv.
+	for (const key of ['claudeCodeSessionId', 'codexThreadId', 'modelOverride', 'effortOverride', 'overrideProvider'] as const) {
+		const v = r[key];
+		if (v !== undefined && v !== null && typeof v !== 'string') return false;
 	}
 	if (!Array.isArray(r.history)) return false;
 	for (const m of r.history) {

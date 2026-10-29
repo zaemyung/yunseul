@@ -54,7 +54,10 @@ function makeSettings(overrides: Partial<YunseulSettings> = {}): YunseulSettings
 			binary: '',
 			modelOverride: '',
 			enableWrites: false,
+			effort: '',
+			knownSlashCommands: [],
 		},
+		codex: { binary: '', model: '', effort: '', enableWrites: false },
 		chat: {
 			suggestions: [],
 			downloadFolder: 'AI Chats',
@@ -324,5 +327,147 @@ describe('ChatSession.send — post-token error', () => {
 		// Server-side session is recoverable; keep the id so the next
 		// send can --resume from the captured init point.
 		expect(session.claudeCodeSessionId).toBe('sess-from-init');
+	});
+});
+
+describe('ChatSession — per-chat /model and /effort overrides', () => {
+	const sendOnce = async (session: ChatSession, text: string): Promise<void> => {
+		const ctx = makeSendCtx();
+		await session.send(text, {
+			boundFileExcerpt: null,
+			onToken: ctx.onToken,
+			onComplete: ctx.onComplete,
+			onError: ctx.onError,
+		});
+	};
+
+	it('resolves model/effort from the chat override first, then the provider default', async () => {
+		const client = makeFakeClient(async (opts) => { opts.onToken('x'); opts.onComplete(); });
+		const plugin = makePlugin(client, {
+			provider: 'claude-code',
+			claudeCode: { binary: '', modelOverride: 'settings-model', effort: 'low', enableWrites: false, knownSlashCommands: [] },
+		});
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const session = new ChatSession(plugin as any);
+		await sendOnce(session, 'one');
+		expect(client.lastOpts?.model).toBe('settings-model');
+		expect(client.lastOpts?.effort).toBe('low');
+		expect(session.effectiveModel()).toBe('settings-model');
+
+		session.setOverrides('claude-code', { model: 'opus', effort: 'high' });
+		await sendOnce(session, 'two');
+		expect(client.lastOpts?.model).toBe('opus');
+		expect(client.lastOpts?.effort).toBe('high');
+	});
+
+	it('omits model/effort entirely when nothing is configured (backend default)', async () => {
+		const client = makeFakeClient(async (opts) => { opts.onToken('x'); opts.onComplete(); });
+		const plugin = makePlugin(client, { provider: 'claude-code' });
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const session = new ChatSession(plugin as any);
+		await sendOnce(session, 'one');
+		expect(client.lastOpts?.model).toBeUndefined();
+		expect(client.lastOpts?.effort).toBeUndefined();
+	});
+
+	it('LM Studio: the chat override replaces the configured chat model, effort stays unset', async () => {
+		const client = makeFakeClient(async (opts) => { opts.onToken('x'); opts.onComplete(); });
+		const plugin = makePlugin(client, { provider: 'lm-studio' });
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const session = new ChatSession(plugin as any);
+		session.setOverrides('lm-studio', { model: 'other-model', effort: 'high' });
+		await sendOnce(session, 'one');
+		expect(client.lastOpts?.model).toBe('other-model');
+		expect(client.lastOpts?.effort).toBe('high');
+	});
+
+	it('round-trips overrides and the Codex thread id through the snapshot', () => {
+		const client = makeFakeClient(async () => {});
+		const plugin = makePlugin(client);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const session = new ChatSession(plugin as any);
+		session.modelOverride = 'opus';
+		session.effortOverride = 'high';
+		session.codexThreadId = 'thread-1';
+		const snap = session.toSnapshot();
+		expect(snap.modelOverride).toBe('opus');
+		expect(snap.effortOverride).toBe('high');
+		expect(snap.codexThreadId).toBe('thread-1');
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const again = new ChatSession(plugin as any, snap);
+		expect(again.modelOverride).toBe('opus');
+		expect(again.effortOverride).toBe('high');
+		expect(again.codexThreadId).toBe('thread-1');
+		// Older snapshots without the fields default to null.
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const legacy = new ChatSession(plugin as any, { id: 'l', createdAt: 1, updatedAt: 1, boundFilePath: null, history: [] });
+		expect(legacy.modelOverride).toBeNull();
+		expect(legacy.codexThreadId).toBeNull();
+	});
+
+	it('captures codexThreadId from onMeta, passes it back as extras, and clears it on a pre-token failure', async () => {
+		let mode: 'fail' | 'ok' = 'fail';
+		const client = makeFakeClient(async (opts) => {
+			if (mode === 'fail') {
+				opts.onMeta?.({ codexThreadId: 'thread-dead' });
+				opts.onError(new Error('boom'));
+				return;
+			}
+			opts.onMeta?.({ codexThreadId: 'thread-live' });
+			opts.onToken('ok');
+			opts.onComplete({ codexThreadId: 'thread-live' });
+		});
+		const plugin = makePlugin(client, { provider: 'codex' });
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const session = new ChatSession(plugin as any);
+		await sendOnce(session, 'one');
+		expect(session.codexThreadId).toBeNull();
+		mode = 'ok';
+		await sendOnce(session, 'two');
+		expect(session.codexThreadId).toBe('thread-live');
+		await sendOnce(session, 'three');
+		expect(client.lastOpts?.extras).toEqual({ codexThreadId: 'thread-live' });
+	});
+});
+
+describe('ChatSession — overrides are scoped to the provider that set them', () => {
+	const sendOnce = async (session: ChatSession, text: string): Promise<void> => {
+		const ctx = makeSendCtx();
+		await session.send(text, { boundFileExcerpt: null, onToken: ctx.onToken, onComplete: ctx.onComplete, onError: ctx.onError });
+	};
+
+	it('a Claude model/effort pair is not handed to Codex after a provider switch, and returns when switching back', async () => {
+		const client = makeFakeClient(async (opts) => { opts.onToken('x'); opts.onComplete(); });
+		const plugin = makePlugin(client, { provider: 'claude-code' });
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const session = new ChatSession(plugin as any);
+		session.setOverrides('claude-code', { model: 'sonnet', effort: 'max' });
+		await sendOnce(session, 'one');
+		expect(client.lastOpts?.model).toBe('sonnet');
+		expect(client.lastOpts?.effort).toBe('max');
+
+		plugin.settings.provider = 'codex';
+		await sendOnce(session, 'two');
+		expect(client.lastOpts?.model).toBeUndefined();
+		expect(client.lastOpts?.effort).toBeUndefined();
+
+		plugin.settings.provider = 'claude-code';
+		await sendOnce(session, 'three');
+		expect(client.lastOpts?.model).toBe('sonnet');
+		expect(client.lastOpts?.effort).toBe('max');
+	});
+
+	it('round-trips overrideProvider through the snapshot and drops an effort level the backend does not accept', () => {
+		const client = makeFakeClient(async () => {});
+		const plugin = makePlugin(client, { provider: 'codex' });
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const session = new ChatSession(plugin as any, {
+			id: 's', createdAt: 1, updatedAt: 1, boundFilePath: null, history: [],
+			modelOverride: 'gpt-x', effortOverride: 'max', overrideProvider: 'codex',
+		});
+		expect(session.toSnapshot().overrideProvider).toBe('codex');
+		expect(session.effectiveModel()).toBe('gpt-x');
+		// 'max' is a Claude level, not a Codex one → provider default instead.
+		expect(session.effectiveEffort()).toBe('');
 	});
 });

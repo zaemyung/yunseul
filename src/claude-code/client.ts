@@ -23,7 +23,7 @@ import type {
 	ProbeResult,
 	StreamChatOpts,
 } from '../llm/types';
-import { buildSafeEnv } from './env';
+import { CLAUDE_ENV_PREFIXES, buildSafeEnv } from './env';
 import type { ClaudeCodeIO } from './io';
 import { type LiveProc } from './lifecycle';
 import { probeBinary } from './probe';
@@ -176,7 +176,7 @@ export class ClaudeCodeClient implements LLMClient {
 		return probeBinary(
 			{
 				io: this.io,
-				env: buildSafeEnv(),
+				env: buildSafeEnv(CLAUDE_ENV_PREFIXES),
 				cwd: process.cwd(),
 				registerLive: (entry) => this.liveProcs.add(entry),
 				unregisterLive: (entry) => {

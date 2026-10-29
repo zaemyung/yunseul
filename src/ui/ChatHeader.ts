@@ -2,6 +2,11 @@ import { type Component, Menu, Notice, setIcon } from 'obsidian';
 import type { ChatSession } from '../chat/session';
 import type { ConnectionState, ConnectionStatusValue } from '../lmstudio/health';
 import type YunseulPlugin from '../main';
+import {
+	providerDefaultEffort,
+	providerDefaultModel,
+	providerDefaultModelLabel,
+} from '../chat/localCommands';
 
 // Renders TWO siblings into opts.root in fixed order:
 //   1. bannerEl   (yunseul-banner, role=alert, initially hidden)
@@ -203,18 +208,22 @@ export function renderChatHeader(opts: ChatHeaderOptions): ChatHeaderHandle {
 	let lastBannerMessage: string | undefined;
 
 	const resolveModelLabel = (): { visible: string; full: string; hidden: boolean } => {
+		// Per-chat /model and /effort overrides win over the settings
+		// defaults, so the strip always names what the next send will use.
 		const settings = opts.plugin.settings;
-		const raw = settings.provider === 'claude-code'
-			? (settings.claudeCode.modelOverride.length > 0 ? settings.claudeCode.modelOverride : 'claude (default)')
-			: (settings.lmStudio.chatModel.length > 0 ? settings.lmStudio.chatModel : '(no model)');
-		if (API_KEY_SHAPE.test(raw)) {
+		const session = opts.getActiveSession();
+		const model = session !== undefined ? session.effectiveModel() : providerDefaultModel(settings);
+		const effort = session !== undefined ? session.effectiveEffort() : providerDefaultEffort(settings);
+		const base = model.length > 0 ? model : providerDefaultModelLabel(settings.provider);
+		if (API_KEY_SHAPE.test(base)) {
 			return {
 				visible: '(model id hidden)',
 				full: '(model id hidden)',
 				hidden: true,
 			};
 		}
-		return { visible: raw, full: raw, hidden: false };
+		const full = effort.length > 0 ? `${base} · ${effort}` : base;
+		return { visible: full, full, hidden: false };
 	};
 
 	const setStatus = (session: ChatSession): void => {
@@ -392,6 +401,18 @@ function formatBannerDetail(envelope: ConnectionState, plugin: YunseulPlugin): s
 			return envelope.message;
 		}
 		return 'Claude Code unavailable. Open Settings → Yunseul to fix.';
+	}
+	if (provider === 'codex') {
+		if (kind === 'not-found') {
+			return '`codex` binary not found. Settings → Yunseul to set path.';
+		}
+		if (kind === 'not-logged-in') {
+			return 'Not logged into Codex. Run `codex login`.';
+		}
+		if (envelope.message !== undefined && envelope.message.length > 0) {
+			return envelope.message;
+		}
+		return 'Codex unavailable. Open Settings → Yunseul to fix.';
 	}
 	if (envelope.message !== undefined && envelope.message.length > 0) {
 		return envelope.message;

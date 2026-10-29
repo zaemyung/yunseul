@@ -13,7 +13,7 @@
 
 > *Yunseul* — sparkling ripples on the water. Where your notes catch the light: brilliant insights amidst a chaotic web of notes.
 
-Chat with your Obsidian vault using a local OpenAI-compatible LLM server (LM Studio, Ollama, llama.cpp server, vLLM, LocalAI) or the Claude Code CLI.
+Chat with your Obsidian vault using a local OpenAI-compatible LLM server (LM Studio, Ollama, llama.cpp server, vLLM, LocalAI), the Claude Code CLI, or the Codex CLI.
 
 <p align="center">
   <img src="assets/screenshot.png" alt="Yunseul chat panel showing the YUNSEUL wordmark, the status strip (model · bound note · context size), the logo, the tagline 'Where your notes catch the light.', four quick-start suggestion chips, and the composer with a 'Ask Yunseul' textarea" width="640" />
@@ -23,7 +23,8 @@ Chat with your Obsidian vault using a local OpenAI-compatible LLM server (LM Stu
 
 ## What it does
 
-- **Two backends, your choice.** Connect to a local LLM server (LM Studio, Ollama, llama.cpp, vLLM, LocalAI) for fully-offline chat, or ride your existing Claude Code subscription via the `claude` CLI subprocess.
+- **Three backends, your choice.** Connect to a local LLM server (LM Studio, Ollama, llama.cpp, vLLM, LocalAI) for fully-offline chat, or ride your existing Claude Code or Codex subscription via the `claude` / `codex` CLI subprocess.
+- **Slash commands.** Type `/` for a command list. `/model` and `/effort` switch model and reasoning effort for the current chat on any backend; with Claude Code you also get the CLI's own headless commands (`/compact`, `/context`, …), skills, and your `<vault>/.claude/commands/`.
 - **Vault-aware retrieval.** Optional on-device BM25 search pulls the most relevant notes for every question. A "Top retrieved sources" block under each reply shows what the model saw, with clickable wikilinks back to the originals.
 - **Tied to your current note.** Each session binds to the active file, so Append always lands where you started — even if you switch notes mid-conversation.
 - **Streaming everything.** Tokens appear as they're generated; Stop anytime; multi-turn conversations persist locally per session.
@@ -33,7 +34,7 @@ Chat with your Obsidian vault using a local OpenAI-compatible LLM server (LM Stu
 
 ## Providers
 
-Yunseul ships two backends. The active one is selected under Settings → Yunseul → Provider.
+Yunseul ships three backends. The active one is selected under Settings → Yunseul → Provider.
 
 ### LM Studio (and other OpenAI-compatible local servers)
 
@@ -41,15 +42,38 @@ Talks to any server that implements the OpenAI `/chat/completions` SSE protocol 
 
 ### Claude Code subprocess
 
-Spawns the local `claude` CLI binary. Yunseul does NOT manage an API key for this provider; it rides on your existing Claude Code authentication (Pro/Max OAuth, Anthropic Console, Bedrock, Vertex, etc.) as configured in your Claude Code install. Configure the binary path (optional — defaults to `claude` on `PATH`) and model in Settings → Yunseul → Provider: Claude Code subprocess. Writes (Edit/Write tools) are off by default; toggle "Allow writes" to let the assistant modify vault files.
+Spawns the local `claude` CLI binary. Yunseul does NOT manage an API key for this provider; it rides on your existing Claude Code authentication (Pro/Max OAuth, Anthropic Console, Bedrock, Vertex, etc.) as configured in your Claude Code install. Configure the binary path (optional — defaults to `claude` on `PATH`) and model in Settings → Yunseul → Provider: Claude Code subprocess. Writes (Edit/Write tools) are off by default; toggle "Enable file writes" to let the assistant modify vault files.
+
+### Codex CLI subprocess
+
+Spawns the local `codex` CLI (`codex exec --json`). As with Claude Code, Yunseul manages no API key: it rides on your existing Codex login (`codex login`, ChatGPT or API key) and your `~/.codex/config.toml` defaults. Configure the binary path (optional — defaults to `codex` on `PATH`), a default model, and a default reasoning effort under Settings → Yunseul → Provider: Codex. Each chat continues the same Codex thread (`codex exec resume`), so follow-up questions keep their context. Codex runs model-issued shell commands inside its own sandbox: read-only by default; toggle "Enable file writes" to switch to the workspace-write sandbox so it can modify vault files. Approval prompts are disabled (there is nobody to answer them from a non-interactive process), so the sandbox is the only guard.
+
+### Slash commands
+
+Type `/` in the composer for a command list. On every backend, Yunseul handles these itself:
+
+- **`/model <id>`** switches the model for the current chat; `/model` alone shows the current one and the names your backend accepts; `/model default` goes back to the setting. The choice is stored with the chat and shown in the status strip.
+- **`/effort <level>`** does the same for reasoning effort. Claude Code accepts low, medium, high, xhigh, max; Codex accepts none, minimal, low, medium, high, xhigh; LM Studio has no effort setting.
+- **`/clear`** starts a new chat, so the transcript and the backend session stay in step.
+
+With the Claude Code provider, any other message that starts with `/` is handed to the CLI as a command, the same way it works in the terminal:
+
+- **Custom commands and skills work** — `<vault>/.claude/commands/*.md`, `<vault>/.claude/skills/`, and your user-level `~/.claude/` ones. The vault root is the CLI's working directory, so vault-specific commands live inside the vault.
+- **Headless-capable built-ins** such as `/compact`, `/context`, and `/usage` run inside the CLI and their output appears as the reply. `/compact` shows a one-line "Conversation compacted" notice and the session carries on with the compacted history.
+- **The popover lists what your CLI advertises** for headless use. Yunseul learns the list from the CLI itself on every reply, so the CLI's entries appear after your first Claude Code reply and always match the installed version.
+- **Terminal-only commands** (`/help`, `/login`, `/theme`, …) reply with the CLI's "isn't available in this environment" notice.
+- **Tool permissions still apply.** Yunseul pre-approves only Read, Grep, and Glob (plus Edit and Write when "Enable file writes" is on), so skills that need Bash, subagents, or the web are denied by the CLI.
+
+Codex's own interactive slash commands do not exist in its non-interactive mode, so with Codex only the three Yunseul commands above apply; any other `/text` is sent as a normal message.
 
 ## Privacy & data flow
 
 - **LM Studio path:** prompts, vault excerpts, and retrieved chunks stay on your machine. No network calls leave the host beyond the local server URL you configured.
 - **Claude Code path:** prompts, vault excerpts, and retrieved chunks are sent to Anthropic via your authenticated `claude` CLI. See Anthropic's privacy policy: https://www.anthropic.com/legal/privacy
+- **Codex path:** prompts, vault excerpts, and retrieved chunks are sent to OpenAI via your authenticated `codex` CLI, which also keeps its own session transcripts under `~/.codex/`. See OpenAI's privacy policy: https://openai.com/policies/privacy-policy
 - **BM25 index** stays in your vault at `<vault>/.yunseul/bm25-index.json`. It is never uploaded by Yunseul itself; any sync service watching the vault will see it (see "Sync services" below).
 - **Sessions** persist locally at `<vault>/.obsidian/plugins/yunseul/sessions/<id>.json`.
-- **Environment variables are allowlist-filtered, not collected.** The Claude Code subprocess inherits only a minimal allowlist (`PATH`, locale, proxy vars, and `CLAUDE_*`/`ANTHROPIC_*`/`AWS_*`/`GOOGLE_*`/`VERTEX_*` auth vars the CLI needs); everything else — including all `ELECTRON_*` internals — is stripped. Yunseul never reads hostname, username, or hardware identifiers, and no environment data leaves your machine.
+- **Environment variables are allowlist-filtered, not collected.** Each CLI subprocess inherits only a minimal allowlist: `PATH`, locale, and proxy vars for both, plus the auth vars its own CLI needs — `CLAUDE_*`/`ANTHROPIC_*`/`AWS_*`/`GOOGLE_*`/`VERTEX_*` for Claude Code, `OPENAI_*`/`CODEX_*` for Codex — and never the other provider's. Everything else — including all `ELECTRON_*` internals — is stripped. Yunseul never reads hostname, username, or hardware identifiers, and no environment data leaves your machine.
 - **Clipboard is write-only and user-initiated.** The Copy buttons write chat text to the clipboard; Yunseul never reads from it.
 - **API keys** for the LM Studio provider are stored in plain text in `<vault>/.obsidian/plugins/yunseul/data.json` (Obsidian's standard plugin data location).
 - **No telemetry, no analytics, no automatic network calls** without an explicit user action (sending a message, clicking Test Connection, or building the vault index).

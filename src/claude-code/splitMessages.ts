@@ -6,6 +6,8 @@
 // tests/claude-code.test.ts:9 (`import { ..., splitMessages, ... } from
 // '../src/claude-code/client'`) keeps working without import-path churn.
 
+import { isSlashCommand } from './slash';
+
 export interface SplitMessagesResult {
 	systemPrompt: string;
 	userPrompt: string;
@@ -22,6 +24,13 @@ export interface SplitMessagesResult {
  *
  * We bundle 1–3 into the system prompt file. The user prompt body
  * depends on whether we have an active --resume session:
+ *   - Slash command (latest user turn starts with `/name`): send that
+ *     turn verbatim, with or without --resume. The CLI only recognizes
+ *     a command at the very start of the prompt, so the "User: " label
+ *     below would silently turn `/compact` into plain text. On a fresh
+ *     session this drops the replayed history — acceptable because a
+ *     command turn is self-contained and the fresh-with-history case
+ *     only arises after a lost session id.
  *   - With --resume: send ONLY the most recent USER turn. The CLI
  *     keeps the prior history server-side. If the latest message is
  *     an assistant turn (regenerate flow), walk back to the last user
@@ -48,19 +57,21 @@ export function splitMessages(
 		return { systemPrompt, userPrompt: '' };
 	}
 
-	// With an active session, the CLI already has prior turns. Send
-	// only the latest user message so we don't duplicate history. If
-	// the tail is an assistant message (regenerate flow), walk back to
-	// find the last user turn — sending an assistant message as the
+	// If the tail is an assistant message (regenerate flow), walk back
+	// to find the last user turn — sending an assistant message as the
 	// user prompt would confuse the resumed session.
+	const lastUser = findLastUserTurn(turns);
+
+	// Slash commands bypass both serialization modes: the CLI must see
+	// `/name …` as the first bytes of stdin or it will not expand it.
+	if (lastUser !== null && isSlashCommand(lastUser.content)) {
+		return { systemPrompt, userPrompt: lastUser.content.trim() };
+	}
+
+	// With an active session, the CLI already has prior turns. Send
+	// only the latest user message so we don't duplicate history.
 	if (hasResume) {
-		for (let i = turns.length - 1; i >= 0; i--) {
-			const t = turns[i];
-			if (t?.role === 'user') {
-				return { systemPrompt, userPrompt: t.content };
-			}
-		}
-		return { systemPrompt, userPrompt: '' };
+		return { systemPrompt, userPrompt: lastUser?.content ?? '' };
 	}
 
 	// Fresh session: serialize every turn so Claude sees the context.
@@ -75,6 +86,16 @@ export function splitMessages(
 		labeled.push(`${label}: ${t.content}`);
 	}
 	return { systemPrompt, userPrompt: labeled.join('\n\n') };
+}
+
+function findLastUserTurn(
+	turns: ReadonlyArray<{ role: string; content: string }>,
+): { role: string; content: string } | null {
+	for (let i = turns.length - 1; i >= 0; i--) {
+		const t = turns[i];
+		if (t?.role === 'user') return t;
+	}
+	return null;
 }
 
 /**

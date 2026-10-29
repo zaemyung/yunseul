@@ -45,6 +45,11 @@ export interface ProbeDeps {
 	registerLive: (entry: LiveProc) => void;
 	unregisterLive: (entry: LiveProc) => void;
 	redactStderr: (s: string) => string;
+	/**
+	 * Product wording for the ok / not-logged-in messages. Defaults to the
+	 * Claude Code strings; the Codex client passes its own.
+	 */
+	labels?: { product: string; loginCommand: string };
 }
 
 /**
@@ -126,7 +131,7 @@ export async function probeBinary(deps: ProbeDeps, binary: string): Promise<Prob
 				settle({
 					ok: false,
 					kind: 'not-found',
-					message: `\`${binary}\` not found on PATH. Run \`which claude\` to locate it and set the full path in Settings.`,
+					message: `\`${binary}\` not found on PATH. Run \`which ${binary}\` to locate it and set the full path in Settings.`,
 				});
 				return;
 			}
@@ -136,13 +141,15 @@ export async function probeBinary(deps: ProbeDeps, binary: string): Promise<Prob
 				message: `Spawn error: ${err.message}`,
 			});
 		});
+		const product = deps.labels?.product ?? 'Claude Code';
+		const loginCommand = deps.labels?.loginCommand ?? 'claude login';
 		proc.on('close', (code: number | null) => {
 			if (code === 0) {
 				settle({
 					ok: true,
 					status: 0,
 					kind: 'ok',
-					message: `Claude Code available: ${stdout.trim() || 'version reported'}`,
+					message: `${product} available: ${stdout.trim() || 'version reported'}`,
 				});
 				return;
 			}
@@ -154,7 +161,7 @@ export async function probeBinary(deps: ProbeDeps, binary: string): Promise<Prob
 					ok: false,
 					status: code ?? -1,
 					kind: 'not-logged-in',
-					message: 'Claude Code is not logged in. Open a terminal and run `claude login`, then click Test again.',
+					message: `${product} is not logged in. Open a terminal and run \`${loginCommand}\`, then click Test again.`,
 				});
 				return;
 			}

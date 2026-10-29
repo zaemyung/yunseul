@@ -61,7 +61,14 @@ export const SAFE_ENV_VARS: ReadonlySet<string> = new Set([
 	'PATHEXT',
 ]);
 
-export const SAFE_ENV_PREFIXES: readonly string[] = [
+/**
+ * Auth/config prefixes the Claude Code CLI needs (OAuth, Console key,
+ * Bedrock, Vertex). Admitted ONLY into the Claude process — Codex runs
+ * model-issued shell commands that inherit its env, so Anthropic/AWS
+ * credentials must never be visible there (and vice versa, see
+ * src/codex/streamChat.ts CODEX_ENV_PREFIXES).
+ */
+export const CLAUDE_ENV_PREFIXES: readonly string[] = [
 	'CLAUDE_',
 	'ANTHROPIC_',
 	'AWS_',
@@ -69,13 +76,20 @@ export const SAFE_ENV_PREFIXES: readonly string[] = [
 	'VERTEX_',
 ];
 
-export function buildSafeEnv(): EnvMap {
+/**
+ * Build the allowlisted env for a provider subprocess: the shared
+ * SAFE_ENV_VARS plus whatever `prefixes` the calling provider admits
+ * (Claude: CLAUDE_ENV_PREFIXES; Codex: OPENAI_/CODEX_). With no prefixes
+ * only the neutral variables pass.
+ */
+export function buildSafeEnv(prefixes: readonly string[] = []): EnvMap {
 	// Justification (community review): we read process.env to construct
-	// the SAFE_ENV subset the Claude Code CLI subprocess inherits. The
-	// renderer's full env contains Electron internals and unrelated
-	// credentials the CLI does not need; the allowlist + ELECTRON_* strip
-	// is a hardening measure, NOT identity collection. No env data leaves
-	// the user machine; it is handed to a locally-spawned subprocess only.
+	// the SAFE_ENV subset the CLI subprocess (Claude Code or Codex)
+	// inherits. The renderer's full env contains Electron internals and
+	// unrelated credentials the CLI does not need; the allowlist +
+	// ELECTRON_* strip is a hardening measure, NOT identity collection. No
+	// env data leaves the user machine; it is handed to a locally-spawned
+	// subprocess only.
 	const out: EnvMap = {};
 	const src = nodeProcess.env;
 	for (const key of Object.keys(src)) {
@@ -88,7 +102,7 @@ export function buildSafeEnv(): EnvMap {
 			out[key] = v;
 			continue;
 		}
-		for (const prefix of SAFE_ENV_PREFIXES) {
+		for (const prefix of prefixes) {
 			if (key.startsWith(prefix)) {
 				out[key] = v;
 				break;

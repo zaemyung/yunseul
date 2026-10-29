@@ -25,7 +25,8 @@ const DEFAULT_SETTINGS: YunseulSettings = {
 		baseUrl: 'http://x', apiKey: '', chatModel: 'm', temperature: 0.7,
 		maxContextChars: 12000, maxConversationRounds: 10,
 	},
-	claudeCode: { binary: '', modelOverride: '', enableWrites: false },
+	claudeCode: { binary: '', modelOverride: '', effort: '', enableWrites: false, knownSlashCommands: [] },
+	codex: { binary: '', model: '', effort: '', enableWrites: false },
 	chat: {
 		suggestions: ['Summarize this note', 'Find related notes'],
 		downloadFolder: 'AI Chats',

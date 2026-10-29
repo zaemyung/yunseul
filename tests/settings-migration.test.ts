@@ -67,7 +67,10 @@ function makeV1(): YunseulSettings {
 			binary: 'claude',
 			modelOverride: 'claude-3-5-sonnet-20241022',
 			enableWrites: true,
+			effort: '',
+			knownSlashCommands: [],
 		},
+		codex: { binary: '', model: '', effort: '', enableWrites: false },
 		chat: {
 			suggestions: ['What is in my vault about X?'],
 			downloadFolder: 'AI Chats',
@@ -310,6 +313,7 @@ describe('migrateSettings — extras ignored', () => {
 		expect(keys).toEqual([
 			'chat',
 			'claudeCode',
+			'codex',
 			'debug',
 			'index',
 			'lmStudio',
@@ -522,5 +526,100 @@ describe('migrateSettingsWithFlag — flag contract for main.ts gate', () => {
 		expect(result.settings).toEqual(DEFAULT_SETTINGS);
 		// No assertion on the migrated flag here — both true and false
 		// are acceptable for an extras-only delta (we just clean them).
+	});
+});
+
+describe('migrateSettings — claudeCode.knownSlashCommands (runtime cache)', () => {
+	it('fills an empty list when a v1 store predates the field, and reports migrated=true', () => {
+		const { settings, migrated } = migrateSettingsWithFlag({
+			schemaVersion: 1,
+			claudeCode: { binary: '', modelOverride: '', enableWrites: false },
+		});
+		expect(settings.claudeCode.knownSlashCommands).toEqual([]);
+		expect(migrated).toBe(true);
+	});
+
+	it('keeps a clean list verbatim with migrated=false (identity path)', () => {
+		const input: YunseulSettings = {
+			...DEFAULT_SETTINGS,
+			claudeCode: { ...DEFAULT_SETTINGS.claudeCode, knownSlashCommands: ['compact', 'usage'] },
+		};
+		const { settings, migrated } = migrateSettingsWithFlag(input);
+		expect(settings.claudeCode.knownSlashCommands).toEqual(['compact', 'usage']);
+		expect(migrated).toBe(false);
+	});
+
+	it('drops malformed or duplicate names (same rule as the NDJSON parser) and reports migrated=true', () => {
+		const { settings, migrated } = migrateSettingsWithFlag({
+			...DEFAULT_SETTINGS,
+			claudeCode: {
+				...DEFAULT_SETTINGS.claudeCode,
+				knownSlashCommands: ['usage', '-flag', 'has space', 42, 'Compact', 'compact', 'compact'],
+			},
+		});
+		expect(settings.claudeCode.knownSlashCommands).toEqual(['Compact', 'compact', 'usage']);
+		expect(migrated).toBe(true);
+	});
+
+	it('non-array value falls back to the default empty list', () => {
+		const result = migrateSettings({
+			schemaVersion: 1,
+			claudeCode: { knownSlashCommands: 'compact,usage' },
+		});
+		expect(result.claudeCode.knownSlashCommands).toEqual([]);
+	});
+
+	it('v0 lift yields an empty cache (no v0 ancestor)', () => {
+		expect(migrateSettings(V0_FIXTURE).claudeCode.knownSlashCommands).toEqual([]);
+	});
+
+	it('the defaults clone is isolated: mutating a migrated result does not poison DEFAULT_SETTINGS', () => {
+		const result = migrateSettings(null);
+		result.claudeCode.knownSlashCommands.push('poison');
+		expect(DEFAULT_SETTINGS.claudeCode.knownSlashCommands).toEqual([]);
+	});
+});
+
+describe('migrateSettings — claudeCode.effort and the codex group', () => {
+	it('fills claudeCode.effort and the codex group from defaults on an older v1 store (migrated=true)', () => {
+		const { settings, migrated } = migrateSettingsWithFlag({
+			schemaVersion: 1,
+			claudeCode: { binary: '', modelOverride: '', enableWrites: false, knownSlashCommands: [] },
+		});
+		expect(settings.claudeCode.effort).toBe('');
+		expect(settings.codex).toEqual(DEFAULT_SETTINGS.codex);
+		expect(migrated).toBe(true);
+	});
+
+	it('keeps codex values and accepts provider=codex (identity path, migrated=false)', () => {
+		const input: YunseulSettings = {
+			...DEFAULT_SETTINGS,
+			provider: 'codex',
+			codex: { binary: '/opt/codex', model: 'gpt-x', effort: 'high', enableWrites: true },
+		};
+		const { settings, migrated } = migrateSettingsWithFlag(input);
+		expect(settings.provider).toBe('codex');
+		expect(settings.codex).toEqual(input.codex);
+		expect(migrated).toBe(false);
+	});
+
+	it('wrong-typed codex fields fall back to defaults', () => {
+		const result = migrateSettings({
+			schemaVersion: 1,
+			codex: { binary: 3, model: null, effort: ['x'], enableWrites: 'yes' },
+		});
+		expect(result.codex).toEqual(DEFAULT_SETTINGS.codex);
+	});
+
+	it('v0 lift yields default codex settings and an empty Claude effort', () => {
+		const r = migrateSettings(V0_FIXTURE);
+		expect(r.codex).toEqual(DEFAULT_SETTINGS.codex);
+		expect(r.claudeCode.effort).toBe('');
+	});
+
+	it('the defaults clone does not share the codex object with DEFAULT_SETTINGS', () => {
+		const r = migrateSettings(null);
+		r.codex.model = 'poison';
+		expect(DEFAULT_SETTINGS.codex.model).toBe('');
 	});
 });

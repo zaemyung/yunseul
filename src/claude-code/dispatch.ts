@@ -42,7 +42,7 @@ export function dispatchTerminate(
 			opts.onError(new Error(`Failed to spawn \`${binary}\`: ${outcome.message}`));
 			return;
 		case 'spawn-enoent':
-			opts.onError(new Error(`\`${binary}\` not found. Configure the Claude binary path in Settings.`));
+			opts.onError(new Error(`\`${binary}\` not found. Set its path under Settings → Yunseul → Provider.`));
 			return;
 		case 'spawn-error':
 			opts.onError(new Error(`Subprocess error: ${outcome.message}`));
@@ -53,7 +53,7 @@ export function dispatchTerminate(
 				? `${safeStderr.slice(0, STDERR_MAX_CHARS)}${STDERR_TRUNCATION_MARKER}`
 				: safeStderr;
 			const detail = truncated.trim().length > 0 ? `: ${truncated.trim()}` : '';
-			opts.onError(new Error(`claude exited with code ${outcome.exitCode}${detail}`));
+			opts.onError(new Error(`${binary} exited with code ${outcome.exitCode}${detail}`));
 			return;
 		}
 	}

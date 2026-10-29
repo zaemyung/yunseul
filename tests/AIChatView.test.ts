@@ -28,7 +28,8 @@ const DEFAULT_SETTINGS: YunseulSettings = {
 		baseUrl: 'http://x', apiKey: '', chatModel: 'm', temperature: 0.7,
 		maxContextChars: 12000, maxConversationRounds: 10,
 	},
-	claudeCode: { binary: '', modelOverride: '', enableWrites: false },
+	claudeCode: { binary: '', modelOverride: '', effort: '', enableWrites: false, knownSlashCommands: [] },
+	codex: { binary: '', model: '', effort: '', enableWrites: false },
 	chat: {
 		suggestions: ['Summarize this note', 'Find related notes'],
 		downloadFolder: 'AI Chats',
@@ -300,5 +301,134 @@ describe('AIChatView — onClose cleanup', () => {
 		// interval are bound to the view's Component lifecycle; both must
 		// be cleared by now.
 		expect(vi.getTimerCount()).toBe(0);
+	});
+});
+
+describe('AIChatView — Claude Code slash commands handled locally', () => {
+	it('/clear starts a new session instead of sending', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'claude-code';
+		const view = makeView(plugin);
+		await view.onOpen();
+		const streamSpy = vi.spyOn(plugin.lmClient, 'streamChat');
+		const createSpy = vi.spyOn(plugin as any, 'createSession');
+
+		const input = getInput(view);
+		input.value = '/clear';
+		triggerEnter(input);
+		await microtasks();
+
+		expect(streamSpy).not.toHaveBeenCalled();
+		expect(createSpy).toHaveBeenCalledTimes(1);
+		expect(input.value).toBe('');
+		await view.onClose();
+	});
+
+	it('/model <id> and /effort <level> set per-chat overrides, persist, refresh the strip, and do not send', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'claude-code';
+		const view = makeView(plugin);
+		await view.onOpen();
+		const streamSpy = vi.spyOn(plugin.lmClient, 'streamChat');
+		const persistSpy = plugin.persistSession as unknown as ReturnType<typeof vi.fn>;
+		persistSpy.mockClear();
+
+		const input = getInput(view);
+		input.value = '/model opus';
+		triggerEnter(input);
+		await microtasks();
+
+		const session = Array.from(plugin.sessions.values())[0]!;
+		expect(streamSpy).not.toHaveBeenCalled();
+		expect(input.value).toBe('');
+		expect(session.modelOverride).toBe('opus');
+		expect(session.history).toHaveLength(0);
+		expect(persistSpy).toHaveBeenCalled();
+		expect(view.containerEl.textContent).toContain('opus');
+
+		input.value = '/effort high';
+		triggerEnter(input);
+		await microtasks();
+		expect(session.effortOverride).toBe('high');
+		expect(view.containerEl.textContent).toContain('opus · high');
+
+		input.value = '/effort bogus';
+		triggerEnter(input);
+		await microtasks();
+		expect(session.effortOverride).toBe('high');
+
+		input.value = '/model default';
+		triggerEnter(input);
+		await microtasks();
+		expect(session.modelOverride).toBeNull();
+		expect(streamSpy).not.toHaveBeenCalled();
+		await view.onClose();
+	});
+
+	it('any other slash command (/compact) is forwarded verbatim as the latest user turn', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'claude-code';
+		const view = makeView(plugin);
+		await view.onOpen();
+		const streamSpy = vi.spyOn(plugin.lmClient, 'streamChat');
+
+		const input = getInput(view);
+		input.value = '/compact';
+		triggerEnter(input);
+		await microtasks();
+
+		expect(streamSpy).toHaveBeenCalledTimes(1);
+		const sent = streamSpy.mock.calls[0]?.[0] as StreamChatOpts;
+		const lastUser = [...sent.messages].reverse().find((m) => m.role === 'user');
+		expect(lastUser?.content).toBe('/compact');
+		handles.emitComplete?.();
+		await microtasks();
+		await view.onClose();
+	});
+
+	it('with the LM Studio provider, /clear also starts a new chat (local commands are provider-neutral)', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'lm-studio';
+		const view = makeView(plugin);
+		await view.onOpen();
+		const streamSpy = vi.spyOn(plugin.lmClient, 'streamChat');
+		const createSpy = vi.spyOn(plugin as any, 'createSession');
+
+		const input = getInput(view);
+		input.value = '/clear';
+		triggerEnter(input);
+		await microtasks();
+
+		expect(streamSpy).not.toHaveBeenCalled();
+		expect(createSpy).toHaveBeenCalledTimes(1);
+		await view.onClose();
+	});
+});
+
+describe('AIChatView — rejected local command keeps the text', () => {
+	it('/model with an invalid id leaves the composer untouched and sets no override', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'claude-code';
+		const view = makeView(plugin);
+		await view.onOpen();
+		const streamSpy = vi.spyOn(plugin.lmClient, 'streamChat');
+		const input = getInput(view);
+		input.value = '/model bad id';
+		triggerEnter(input);
+		await microtasks();
+		const session = Array.from(plugin.sessions.values())[0]!;
+		expect(input.value).toBe('/model bad id');
+		expect(session.modelOverride).toBeNull();
+		expect(streamSpy).not.toHaveBeenCalled();
+		input.value = '/effort bogus';
+		triggerEnter(input);
+		await microtasks();
+		expect(input.value).toBe('/effort bogus');
+		await view.onClose();
 	});
 });

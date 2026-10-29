@@ -1,9 +1,12 @@
 import { type Component } from 'obsidian';
 import type { ChatSession } from '../chat/session';
 import type YunseulPlugin from '../main';
+import { renderSlashMenu } from './SlashMenu';
+import { availableSlashCommands } from '../claude-code/slash';
 
 // Textarea + send/stop button + slash hint + Cmd-Enter hint + context
-// pill + token meter. Owns its own DOM, the auto-grow resize, and
+// pill + token meter + slash-command popover (SlashMenu.ts, Claude Code
+// provider only). Owns its own DOM, the auto-grow resize, and
 // typing/has-bound classes. Does NOT toggle the connection-dot's
 // is-streaming class — the orchestrator's setStreamingUI helper routes
 // that through ChatHeader.setStreamingPulse so composer and header
@@ -28,6 +31,8 @@ export interface ChatComposerHandle {
 	updateContextRow(): void;
 	setSendButtonStreaming(streaming: boolean): void;
 	setSlashHintDescribedBy(on: boolean): void;
+	/** Re-read the provider: hint wording + popover availability. */
+	updateSlashHint(): void;
 	focus(): void;
 	getValue(): string;
 	setValue(v: string): void;
@@ -51,7 +56,40 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 		},
 	});
 
+	// Slash-command popover. Anchored to the frame (position: relative in
+	// styles.css) so it can open upward over the transcript. Reads the
+	// provider + cached command list live, so a provider switch or a
+	// freshly learned list takes effect on the next keystroke.
+	const slashMenu = renderSlashMenu({
+		anchorEl: frameEl,
+		inputEl,
+		component: opts.component,
+		menuId: `${opts.slashHintId}-menu`,
+		// Every provider has Yunseul's own commands (/model, /effort,
+		// /clear); Claude Code adds whatever its CLI advertised.
+		isEnabled: () => true,
+		getCommands: () => availableSlashCommands(
+			opts.plugin.settings.provider,
+			opts.plugin.settings.claudeCode.knownSlashCommands,
+		),
+		onPick: (name) => {
+			inputEl.value = `/${name} `;
+			const end = inputEl.value.length;
+			inputEl.setSelectionRange(end, end);
+			frameEl.toggleClass('is-typing', true);
+			updateContextRow();
+			inputEl.focus();
+		},
+	});
+
+	// The popover gets first pick of every keystroke while open: arrows
+	// move, Enter/Tab accept, Escape closes. Only when it declines does
+	// Enter send and Escape hand focus back.
 	opts.component.registerDomEvent(inputEl, 'keydown', (ev: KeyboardEvent) => {
+		if (slashMenu.handleKeydown(ev)) {
+			ev.preventDefault();
+			return;
+		}
 		if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
 			ev.preventDefault();
 			opts.onSendOrStop();
@@ -66,6 +104,7 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 		resize();
 		frameEl.toggleClass('is-typing', inputEl.value.length > 0);
 		updateContextRow();
+		slashMenu.sync();
 	});
 
 	// Below textarea: slash hint + send strip.
@@ -78,7 +117,7 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 		cls: 'yunseul-slash-badge',
 		text: '/',
 	});
-	slashHint.createSpan({ text: ' file, tag, or prompt' });
+	const slashHintText = slashHint.createSpan({ text: slashHintLabel(opts.plugin) });
 
 	const sendHint = strip.createDiv({ cls: 'yunseul-composer-send-hint' });
 	// Hint must match the keydown handler above: plain Enter sends,
@@ -217,6 +256,13 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 		}
 	};
 
+	const updateSlashHint = (): void => {
+		slashHintText.setText(slashHintLabel(opts.plugin));
+		// Provider switched while the popover was open (settings tab and
+		// chat side by side): re-evaluate so it closes or reopens.
+		slashMenu.sync();
+	};
+
 	updateContextRow();
 
 	return {
@@ -226,13 +272,23 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 		updateContextRow,
 		setSendButtonStreaming,
 		setSlashHintDescribedBy,
+		updateSlashHint,
 		focus: () => inputEl.focus(),
 		getValue: () => inputEl.value,
 		setValue: (v: string) => {
 			inputEl.value = v;
+			slashMenu.sync();
 		},
 		resize,
 	};
+}
+
+// `/` opens the command popover for every provider; Claude Code's list
+// is the long one (its CLI's own commands), so name it.
+function slashHintLabel(plugin: YunseulPlugin): string {
+	return plugin.settings.provider === 'claude-code'
+		? ' Claude Code commands'
+		: ' commands';
 }
 
 function estimateContextChars(session: ChatSession): number {

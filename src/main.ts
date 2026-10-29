@@ -5,7 +5,6 @@ import {
 	type YunseulSettings,
 } from './settings';
 import { LMClient } from './lmstudio/client';
-import { ClaudeCodeClient } from './claude-code/client';
 import type { ConnectionState, ConnectionStatusValue } from './lmstudio/health';
 import { makeLLMClient } from './llm/factory';
 import type { LLMClient } from './llm/types';
@@ -23,6 +22,7 @@ import { makeLog, type Logger } from './util/log';
 import { bm25IndexPath, sessionsDir } from './util/paths';
 import { VaultRetriever } from './index/retriever';
 import { isAbortError } from './util/guards';
+import { sameSlashCommandList } from './claude-code/slash';
 
 // Plugin root. Owns every shared resource — sessions, LMClient,
 // settings, connection-state pub-sub. Views are intentionally thin:
@@ -168,15 +168,13 @@ export default class YunseulPlugin extends Plugin {
 			this.persistSession(s);
 			s.stop();
 		}
-		// Kill any subprocess the Claude Code client started but didn't
-		// see closed yet — onunload races the abort dispatch above.
-		// killAll() marks each live proc as aborted, so the close
-		// handler routes through opts.onComplete (clean) rather than
-		// opts.onError (which would push a spurious error into the
+		// Kill any subprocess the CLI-backed client (Claude Code, Codex)
+		// started but didn't see closed yet — onunload races the abort
+		// dispatch above. killAll() marks each live proc as aborted, so
+		// the close handler routes through opts.onComplete (clean) rather
+		// than opts.onError (which would push a spurious error into the
 		// persisted assistant bubble right before we serialize it).
-		if (this.lmClient instanceof ClaudeCodeClient) {
-			this.lmClient.killAll();
-		}
+		this.lmClient.killAll?.();
 		// Fire-and-forget — we cannot await inside onunload, but the
 		// internal queue ensures writes complete in order. If Obsidian
 		// is shutting down the process, the underlying adapter has
@@ -248,6 +246,25 @@ export default class YunseulPlugin extends Plugin {
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 		for (const l of this.settingsListeners) l();
+	}
+
+	/**
+	 * Remember the slash commands the Claude Code CLI advertised in its
+	 * latest `system/init` event (built-ins that work headless, skills,
+	 * `.claude/commands/`). The composer's `/` popover reads the persisted
+	 * list, so it is available before the next subprocess starts and
+	 * tracks whatever the installed CLI version supports. Skips the write
+	 * when nothing changed — init fires on every message.
+	 */
+	rememberSlashCommands(names: readonly string[]): void {
+		if (this.unloaded) return;
+		if (sameSlashCommandList(this.settings.claudeCode.knownSlashCommands, names)) return;
+		this.settings.claudeCode.knownSlashCommands = [...names];
+		this.saveSettings().catch((e: unknown) => {
+			this.logger.warn(
+				`Could not persist the slash command list: ${e instanceof Error ? e.message : String(e)}`,
+			);
+		});
 	}
 
 	/**
@@ -466,12 +483,10 @@ export default class YunseulPlugin extends Plugin {
 				s.stop();
 			}
 		}
-		// Tear down the previous claude subprocess pool before swapping
-		// it out — otherwise the stale processes leak past the swap and
-		// fight the new client for the user prompt on stdin.
-		if (this.lmClient instanceof ClaudeCodeClient) {
-			this.lmClient.killAll();
-		}
+		// Tear down the previous subprocess pool (Claude Code or Codex)
+		// before swapping it out — otherwise the stale processes leak past
+		// the swap and fight the new client for the user prompt on stdin.
+		this.lmClient.killAll?.();
 		this.lmClient = makeLLMClient(this);
 		if (hadStreaming) {
 			new Notice('Provider switched; pending stream cancelled.');

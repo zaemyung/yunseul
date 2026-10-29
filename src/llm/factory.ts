@@ -1,6 +1,7 @@
 import type YunseulPlugin from '../main';
 import { LMClient } from '../lmstudio/client';
 import { ClaudeCodeClient } from '../claude-code/client';
+import { CodexClient } from '../codex/client';
 import type { LLMClient } from './types';
 
 // Single source of truth for "which backend is wired up right now".
@@ -14,6 +15,8 @@ export function makeLLMClient(plugin: YunseulPlugin): LLMClient {
 	switch (plugin.settings.provider) {
 		case 'claude-code':
 			return new ClaudeCodeClient(plugin);
+		case 'codex':
+			return new CodexClient(plugin);
 		case 'lm-studio':
 		default:
 			return new LMClient(() => plugin.settings);

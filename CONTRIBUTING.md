@@ -20,10 +20,12 @@ yunseul/
     chat/                # provider-agnostic chat layer (session, prompt, persist, sanitize)
     llm/                 # provider abstraction (LLMClient interface, factory)
     lmstudio/            # OpenAI-compatible HTTP/SSE client
-    claude-code/         # subprocess client (env, ndjson, lifecycle, probe, sysprompt, …)
+    claude-code/         # Claude Code subprocess client (env, ndjson, lifecycle, probe, sysprompt, slash, …)
+                         #   lifecycle/env/probe/dispatch/splitMessages double as the shared subprocess plumbing
+    codex/               # Codex CLI subprocess client (argv, events, toml, streamChat) built on that plumbing
     index/               # BM25 inverted index + retriever
     ui/                  # AIChatView orchestrator + extracted modules
-    util/                # shared helpers (guards, paths, log, throttle, redact)
+    util/                # shared helpers (guards, paths, log, throttle, redact, lineBuffer)
   tests/                 # vitest suites with the obsidian module stubbed under tests/_stubs/
 ```
 
@@ -55,6 +57,13 @@ To exercise the Claude Code backend you need the `claude` CLI installed and auth
 ```bash
 claude --version
 claude /status
+```
+
+For the Codex backend, the `codex` CLI (0.165 or later was used during development) logged in:
+
+```bash
+codex --version
+codex login status
 ```
 
 To exercise the LM Studio backend, start a server:
@@ -97,11 +106,11 @@ The vitest suites under `tests/` exercise the same code from a JSDOM environment
 
 ### Provider abstraction (LLMClient)
 
-The chat layer only ever sees `LLMClient` from `src/llm/types.ts` — a narrow three-method interface (`listModels`, `streamChat`, `probe`). Today's two implementations are `LMClient` (`src/lmstudio/client.ts`, plain `fetch` + an inline SSE parser) and `ClaudeCodeClient` (`src/claude-code/client.ts`, orchestrator over env/lifecycle/ndjson/probe/sysprompt modules). `src/llm/factory.ts` picks one based on `settings.provider`; the chat session, view, prompt assembler, and persistence layer never look at the discriminator themselves.
+The chat layer only ever sees `LLMClient` from `src/llm/types.ts` — a narrow interface (`listModels`, `streamChat`, `probe`, plus an optional `killAll` for subprocess-backed clients). Today's three implementations are `LMClient` (`src/lmstudio/client.ts`, plain `fetch` + an inline SSE parser), `ClaudeCodeClient` (`src/claude-code/client.ts`, orchestrator over env/lifecycle/ndjson/probe/sysprompt modules), and `CodexClient` (`src/codex/client.ts`, `codex exec --json` with `exec resume` for thread continuity; the system prompt travels as a `-c developer_instructions=` TOML override). `src/llm/factory.ts` picks one based on `settings.provider`; the chat session, view, prompt assembler, and persistence layer never look at the discriminator themselves — the session resolves the effective model/effort (per-chat `/model` `/effort` override → provider setting → backend default, see `src/chat/localCommands.ts`) and passes them in `StreamChatOpts`.
 
 ### Settings (schemaVersion + grouped shape + migration)
 
-`YunseulSettings` (declared in `src/settings.ts`) carries `schemaVersion: 1` and groups every knob into one of five sub-objects: `lmStudio`, `claudeCode`, `chat`, `index`, `privacy`. The grouped layout is the post-v1 shape; pre-v1 stores were a flat object with 20+ root keys. `migrateSettings(raw)` is the single load-time function that accepts either shape, defensively type-checks each pick, and fills missing fields with `DEFAULT_SETTINGS`. `main.ts` calls it once in `onload`, then immediately persists the migrated blob so the next launch reads v1 directly.
+`YunseulSettings` (declared in `src/settings.ts`) carries `schemaVersion: 1` and groups every knob into one of six sub-objects: `lmStudio`, `claudeCode`, `codex`, `chat`, `index`, `privacy`. The grouped layout is the post-v1 shape; pre-v1 stores were a flat object with 20+ root keys. `migrateSettings(raw)` is the single load-time function that accepts either shape, defensively type-checks each pick, and fills missing fields with `DEFAULT_SETTINGS`. `main.ts` calls it once in `onload`, then immediately persists the migrated blob so the next launch reads v1 directly.
 
 ### BM25 retrieval
 
@@ -112,7 +121,8 @@ The chat layer only ever sees `LLMClient` from `src/llm/types.ts` — a narrow t
 `src/ui/AIChatView.ts` is the `ItemView` orchestrator and is intentionally thin — lifecycle, click delegation, history replay, send orchestration. The substantive UI work lives in extracted modules:
 
 - `ChatHeader.ts` — wordmark, status strip, Copy all / Download / New chat buttons.
-- `ChatComposer.ts` — textarea, send/stop morph button, slash hint, bound-file pill.
+- `ChatComposer.ts` — textarea, send/stop morph button, slash hint, bound-file pill, slash-command popover wiring (popover gets first pick of keystrokes, then Enter sends).
+- `SlashMenu.ts` — the `/` command popover: a listbox driven from the textarea (`aria-activedescendant`). It always offers Yunseul's own commands (`/clear`, `/model`, `/effort`, handled in `src/chat/localCommands.ts`) and, for Claude Code, the CLI's own list from `settings.claudeCode.knownSlashCommands`, which `main.ts` refreshes from every `system/init`. Pure parsing/validation lives in `src/claude-code/slash.ts`.
 - `EmptyState.ts` — logo, tagline, bound-note indicator, and composer hint.
 - `SourcesBlock.ts` — "Top retrieved sources" collapsible with stable keying.
 - `ChatExporter.ts` — `sessionToMarkdown`, copy-all, download-conversation.
@@ -132,7 +142,7 @@ The chat layer only ever sees `LLMClient` from `src/llm/types.ts` — a narrow t
 
 ## How to add a setting
 
-1. Add the field to `YunseulSettings` under the right sub-object (`lmStudio`, `claudeCode`, `chat`, `index`, `privacy`, or top-level for cross-cutting flags).
+1. Add the field to `YunseulSettings` under the right sub-object (`lmStudio`, `claudeCode`, `codex`, `chat`, `index`, `privacy`, or top-level for cross-cutting flags).
 2. Add a sensible default to `DEFAULT_SETTINGS`.
 3. Extend `migrateSettings()` so older `data.json` files without the field load cleanly. The grouped-shape branch fills missing nested keys against `DEFAULT_SETTINGS` already; you only need to handle the v0 (flat) lift path if your field has a pre-v1 ancestor.
 4. Add tests to `tests/settings-migration.test.ts` covering the v0 lift, the v1 partial heal, and any type-validation fallback.

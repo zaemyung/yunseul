@@ -48,3 +48,11 @@ describe('makeLLMClient', () => {
 		expect(client).toBeInstanceOf(LMClient);
 	});
 });
+
+describe('makeLLMClient — codex', () => {
+	it("returns a CodexClient instance when provider='codex'", async () => {
+		const { CodexClient } = await import('../src/codex/client');
+		const client = makeLLMClient(makeStubPlugin('codex'));
+		expect(client).toBeInstanceOf(CodexClient);
+	});
+});

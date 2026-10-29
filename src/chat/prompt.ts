@@ -47,7 +47,7 @@ export interface RetrievedChunk {
  * whether it can write. LM Studio doesn't need either since the
  * vault excerpt is inlined verbatim into the messages array.
  */
-export type PromptProvider = 'lm-studio' | 'claude-code';
+export type PromptProvider = 'lm-studio' | 'claude-code' | 'codex';
 
 export interface AssembleArgs {
 	systemPrompt?: string;
@@ -56,18 +56,18 @@ export interface AssembleArgs {
 	history: ChatMessage[];
 	maxChars: number;
 	/**
-	 * Optional. Defaults to 'lm-studio' for backward compat. When set
-	 * to 'claude-code', the system prompt gains a short addendum about
-	 * cwd + wikilink preference + (when writes are disabled) a note
-	 * not to propose edits.
+	 * Optional. Defaults to 'lm-studio' for backward compat. For the
+	 * subprocess providers ('claude-code', 'codex') the system prompt
+	 * gains a short addendum about cwd + wikilink preference + (when
+	 * writes are disabled) a note not to propose edits.
 	 */
 	provider?: PromptProvider;
 	/**
-	 * Whether the Claude Code provider has writes enabled. Only
-	 * meaningful when `provider === 'claude-code'`. Defaults to false
-	 * (read-only) which matches the settings default.
+	 * Whether the subprocess provider has writes enabled (Claude Code's
+	 * Edit/Write tools, Codex's workspace-write sandbox). Ignored for LM
+	 * Studio. Defaults to false (read-only), matching the settings.
 	 */
-	claudeCodeWritesEnabled?: boolean;
+	writesEnabled?: boolean;
 }
 
 // The plan-prescribed injection guard. We always concatenate this onto
@@ -94,6 +94,15 @@ const CLAUDE_CODE_ADDENDUM_READ_WRITE =
 	'You are operating inside an Obsidian vault. The current working directory is the vault root. When referring to notes in your reply, use the Obsidian wikilink syntax [[Note Name]] (without the .md extension) so the user can click through. You may use Read, Grep, Glob, Edit, and Write tools against the vault as needed.';
 const CLAUDE_CODE_ADDENDUM_READ_ONLY =
 	'You are operating inside an Obsidian vault. The current working directory is the vault root. When referring to notes in your reply, use the Obsidian wikilink syntax [[Note Name]] (without the .md extension) so the user can click through. You can read and search files in this vault but cannot modify them — do not propose edits as if you will apply them. If the user explicitly asks for changes, summarize the change in your reply rather than calling Edit/Write.';
+
+// Codex runs model-issued shell commands inside its own sandbox: read-only
+// by default (`sandbox_mode = read-only`), workspace-write when the user
+// enables writes. The addendum tells the model which world it is in so it
+// does not attempt (and then report) writes that the sandbox refuses.
+const CODEX_ADDENDUM_READ_WRITE =
+	'You are operating inside an Obsidian vault. The current working directory is the vault root. When referring to notes in your reply, use the Obsidian wikilink syntax [[Note Name]] (without the .md extension) so the user can click through. You may read, search, and edit files in this vault with your shell tools as needed.';
+const CODEX_ADDENDUM_READ_ONLY =
+	'You are operating inside an Obsidian vault. The current working directory is the vault root. When referring to notes in your reply, use the Obsidian wikilink syntax [[Note Name]] (without the .md extension) so the user can click through. You can read and search files in this vault with read-only shell commands but cannot modify them — do not propose edits as if you will apply them. If the user explicitly asks for changes, summarize the change in your reply instead.';
 
 const ZERO_WIDTH_SPACE = '​';
 const SAFE_CLOSE_TAG = `</vault_excerpt${ZERO_WIDTH_SPACE}>`;
@@ -153,9 +162,12 @@ export class PromptAssembler {
 	static buildWithMeta(args: AssembleArgs): AssembleResult {
 		const system = (args.systemPrompt ?? DEFAULT_SYSTEM_PROMPT).trim();
 		const provider: PromptProvider = args.provider ?? 'lm-studio';
+		const writes = args.writesEnabled === true;
 		const addendum = provider === 'claude-code'
-			? `\n\n${args.claudeCodeWritesEnabled === true ? CLAUDE_CODE_ADDENDUM_READ_WRITE : CLAUDE_CODE_ADDENDUM_READ_ONLY}`
-			: '';
+			? `\n\n${writes ? CLAUDE_CODE_ADDENDUM_READ_WRITE : CLAUDE_CODE_ADDENDUM_READ_ONLY}`
+			: provider === 'codex'
+				? `\n\n${writes ? CODEX_ADDENDUM_READ_WRITE : CODEX_ADDENDUM_READ_ONLY}`
+				: '';
 		const systemContent = `${system}\n\n${INJECTION_GUARD}${addendum}`;
 
 		const out: AssembledMessage[] = [{ role: 'system', content: systemContent }];

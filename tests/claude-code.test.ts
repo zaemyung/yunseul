@@ -93,14 +93,21 @@ function makePlugin(overrides?: { enableWrites?: boolean; model?: string; binary
 	logger: { debug: (...a: unknown[]) => void; info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void; error: (...a: unknown[]) => void };
 	app: { vault: { adapter: FileSystemAdapter; configDir: string } };
 	manifest: { id: string };
+	// Captures every list the client forwarded from `system/init`.
+	rememberedSlashCommands: string[][];
+	rememberSlashCommands: (names: readonly string[]) => void;
 } {
+	const rememberedSlashCommands: string[][] = [];
 	return {
 		settings: {
 			claudeCode: {
 				binary: overrides?.binary ?? '',
 				modelOverride: overrides?.model ?? '',
 				enableWrites: overrides?.enableWrites ?? false,
+				effort: '',
+				knownSlashCommands: [],
 			},
+			codex: { binary: '', model: '', effort: '', enableWrites: false },
 			debug: false,
 		},
 		logger: {
@@ -116,6 +123,10 @@ function makePlugin(overrides?: { enableWrites?: boolean; model?: string; binary
 			},
 		},
 		manifest: { id: 'yunseul' },
+		rememberedSlashCommands,
+		rememberSlashCommands: (names): void => {
+			rememberedSlashCommands.push([...names]);
+		},
 	};
 }
 
@@ -1155,6 +1166,293 @@ describe('ClaudeCodeClient.streamChat — hazard paths (audit T2)', () => {
 			expect(harness.nextProc.killSignals).toContain('SIGKILL');
 		} finally {
 			vi.useRealTimers();
+		}
+	});
+});
+
+describe('splitMessages — slash commands are sent verbatim (headless expansion)', () => {
+	it('on a fresh single-turn session, a slash command is NOT given the "User: " label', () => {
+		const r = splitMessages([
+			{ role: 'system', content: 'sys' },
+			{ role: 'user', content: '/ping 42' },
+		], false);
+		expect(r.userPrompt).toBe('/ping 42');
+		expect(r.systemPrompt).toBe('sys');
+	});
+
+	it('on a fresh multi-turn session (lost session id), only the slash turn is sent', () => {
+		const r = splitMessages([
+			{ role: 'user', content: 'hello' },
+			{ role: 'assistant', content: 'hi' },
+			{ role: 'user', content: '/compact' },
+		], false);
+		expect(r.userPrompt).toBe('/compact');
+	});
+
+	it('with --resume, a slash command is sent verbatim (unchanged behavior, pinned)', () => {
+		const r = splitMessages([
+			{ role: 'user', content: 'hello' },
+			{ role: 'assistant', content: 'hi' },
+			{ role: 'user', content: '/context' },
+		], true);
+		expect(r.userPrompt).toBe('/context');
+	});
+
+	it('walks back past an assistant tail to find the slash turn', () => {
+		const r = splitMessages([
+			{ role: 'user', content: '/ping 1' },
+			{ role: 'assistant', content: 'PONG-1' },
+		], false);
+		expect(r.userPrompt).toBe('/ping 1');
+	});
+
+	it('does not treat an absolute path at the start of a message as a command', () => {
+		const r = splitMessages([
+			{ role: 'user', content: '/Users/me/note.md — what is this file about?' },
+		], false);
+		expect(r.userPrompt).toBe('User: /Users/me/note.md — what is this file about?');
+	});
+
+	it('a slash command earlier in history does not affect a later plain turn', () => {
+		const r = splitMessages([
+			{ role: 'user', content: '/ping 1' },
+			{ role: 'assistant', content: 'PONG-1' },
+			{ role: 'user', content: 'thanks' },
+		], false);
+		expect(r.userPrompt).toBe('User: /ping 1\n\nAssistant: PONG-1\n\nUser: thanks');
+	});
+});
+
+describe('ClaudeCodeClient.streamChat — headless commands: no-delta fallback, compaction, slash_commands', () => {
+	// Event shapes captured from claude 2.1.308 (`claude -p --output-format
+	// stream-json --verbose --include-partial-messages`). Local commands
+	// such as /context answer via `assistant` + `result` only; a normal
+	// model turn streams every byte as text_delta first.
+	const delta = (text: string): string =>
+		JSON.stringify({
+			type: 'stream_event',
+			event: { type: 'content_block_delta', delta: { type: 'text_delta', text } },
+		}) + '\n';
+	const assistant = (text: string): string =>
+		JSON.stringify({
+			type: 'assistant',
+			message: { role: 'assistant', content: [{ type: 'text', text }] },
+		}) + '\n';
+	const result = (extra: Record<string, unknown>): string =>
+		JSON.stringify({ type: 'result', subtype: 'success', is_error: false, session_id: 's1', num_turns: 0, ...extra }) + '\n';
+	const COMPACT_BOUNDARY =
+		'{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"manual","pre_tokens":21020,"post_tokens":5429,"cumulative_dropped_tokens":15591,"duration_ms":5146}}\n';
+
+	async function start(): Promise<{ harness: TestHarness; opts: ReturnType<typeof makeOpts> }> {
+		const harness = makeHarness();
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const client = new ClaudeCodeClient(harness.plugin as any, harness.io);
+		const opts = makeOpts({ messages: [{ role: 'user', content: '/context' }] });
+		void client.streamChat(opts);
+		await flush();
+		return { harness, opts };
+	}
+
+	it('emits the result text exactly once when no text delta was streamed (/context shape)', async () => {
+		const { harness, opts } = await start();
+		harness.nextProc.emitStdout(assistant('## Context Usage\n\n**Tokens:** 13.8k'));
+		harness.nextProc.emitStdout(result({ result: '## Context Usage\n\n**Tokens:** 13.8k' }));
+		harness.nextProc.finish(0);
+		await flush();
+		expect(opts.tokens).toEqual(['## Context Usage\n\n**Tokens:** 13.8k']);
+		expect(opts.completed).toBe(true);
+	});
+
+	it('falls back to the assistant text when the result text is empty', async () => {
+		const { harness, opts } = await start();
+		harness.nextProc.emitStdout(assistant('only in assistant'));
+		harness.nextProc.emitStdout(result({ result: '' }));
+		harness.nextProc.finish(0);
+		await flush();
+		expect(opts.tokens).toEqual(['only in assistant']);
+	});
+
+	it('does NOT double-emit on a normal turn where deltas streamed the same text', async () => {
+		const { harness, opts } = await start();
+		harness.nextProc.emitStdout(delta('Hel'));
+		harness.nextProc.emitStdout(delta('lo'));
+		harness.nextProc.emitStdout(assistant('Hello'));
+		harness.nextProc.emitStdout(result({ result: 'Hello', num_turns: 1 }));
+		harness.nextProc.finish(0);
+		await flush();
+		expect(opts.tokens).toEqual(['Hel', 'lo']);
+	});
+
+	it('does not fall back on an error result (lifecycle layer owns that surface)', async () => {
+		const { harness, opts } = await start();
+		harness.nextProc.emitStdout(
+			JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'boom', session_id: 's1' }) + '\n',
+		);
+		harness.nextProc.finish(1);
+		await flush();
+		expect(opts.tokens).toEqual([]);
+		expect(opts.errored).not.toBeNull();
+	});
+
+	it('emits the fallback text BEFORE the result meta so the session sees a token first', async () => {
+		const order: string[] = [];
+		const harness = makeHarness();
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const client = new ClaudeCodeClient(harness.plugin as any, harness.io);
+		const opts = makeOpts({
+			messages: [{ role: 'user', content: '/usage' }],
+			onToken: (t) => { order.push(`token:${t}`); },
+			onMeta: (m) => { order.push(`meta:${m.sessionId ?? '?'}`); },
+		});
+		void client.streamChat(opts);
+		await flush();
+		harness.nextProc.emitStdout(result({ result: 'usage text' }));
+		harness.nextProc.finish(0);
+		await flush();
+		expect(order).toEqual(['token:usage text', 'meta:s1']);
+	});
+
+	it('renders a compaction notice from compact_boundary (fixture) and completes cleanly', async () => {
+		const { harness, opts } = await start();
+		harness.nextProc.emitStdout(
+			JSON.stringify({ type: 'system', subtype: 'status', status: 'compacting', session_id: 's1' }) + '\n',
+		);
+		harness.nextProc.emitStdout(COMPACT_BOUNDARY);
+		harness.nextProc.emitStdout(result({ result: '' }));
+		harness.nextProc.finish(0);
+		await flush();
+		expect(opts.tokens).toEqual(['> Conversation compacted (21.0k → 5.4k tokens).']);
+		expect(opts.completed).toBe(true);
+	});
+
+	it('separates an automatic mid-reply compaction notice from the surrounding prose', async () => {
+		const { harness, opts } = await start();
+		harness.nextProc.emitStdout(delta('Let me check.'));
+		harness.nextProc.emitStdout(COMPACT_BOUNDARY.replace('"manual"', '"auto"'));
+		harness.nextProc.emitStdout(delta('Found it.'));
+		harness.nextProc.emitStdout(result({ result: 'Let me check.Found it.', num_turns: 2 }));
+		harness.nextProc.finish(0);
+		await flush();
+		expect(opts.tokens.join('')).toBe(
+			'Let me check.\n\n> Conversation compacted (21.0k → 5.4k tokens).\n\nFound it.',
+		);
+	});
+
+	it('keeps a reply that follows a leading compaction out of the notice blockquote', async () => {
+		const { harness, opts } = await start();
+		harness.nextProc.emitStdout(COMPACT_BOUNDARY.replace('"manual"', '"auto"'));
+		harness.nextProc.emitStdout(delta('Answer.'));
+		harness.nextProc.finish(0);
+		await flush();
+		expect(opts.tokens.join('')).toBe('> Conversation compacted (21.0k → 5.4k tokens).\n\nAnswer.');
+	});
+
+	it('renders a bare compaction notice when compact_metadata is missing', async () => {
+		const { harness, opts } = await start();
+		harness.nextProc.emitStdout(
+			JSON.stringify({ type: 'system', subtype: 'compact_boundary', session_id: 's1' }) + '\n',
+		);
+		harness.nextProc.finish(0);
+		await flush();
+		expect(opts.tokens).toEqual(['> Conversation compacted.']);
+	});
+
+	it('forwards the sanitized slash_commands list from init to plugin.rememberSlashCommands', async () => {
+		const { harness } = await start();
+		harness.nextProc.emitStdout(
+			JSON.stringify({
+				type: 'system',
+				subtype: 'init',
+				session_id: 'sess-1',
+				slash_commands: ['usage', 'compact', 42, '-bad', 'has space', 'anthropic-skills:pdf', 'compact'],
+				terminal_slash_commands: ['color'],
+			}) + '\n',
+		);
+		harness.nextProc.finish(0);
+		await flush();
+		expect(harness.plugin.rememberedSlashCommands).toEqual([
+			['anthropic-skills:pdf', 'compact', 'usage'],
+		]);
+	});
+
+	it('leaves the slash command cache alone when init carries no slash_commands (older CLI)', async () => {
+		const { harness } = await start();
+		harness.nextProc.emitStdout(
+			JSON.stringify({ type: 'system', subtype: 'init', session_id: 'sess-1' }) + '\n',
+		);
+		harness.nextProc.finish(0);
+		await flush();
+		expect(harness.plugin.rememberedSlashCommands).toEqual([]);
+	});
+});
+
+describe('ClaudeCodeClient.streamChat — model/effort: session-resolved opts win over settings', () => {
+	async function argsFor(
+		overrides: Partial<StreamChatOpts>,
+		settingsPatch?: Record<string, unknown>,
+	): Promise<string[]> {
+		const harness = makeHarness({ model: 'settings-model' });
+		if (settingsPatch !== undefined) {
+			Object.assign(harness.plugin.settings.claudeCode as Record<string, unknown>, settingsPatch);
+		}
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const client = new ClaudeCodeClient(harness.plugin as any, harness.io);
+		const opts = makeOpts({ messages: [{ role: 'user', content: 'x' }], ...overrides });
+		void client.streamChat(opts);
+		await flush();
+		harness.nextProc.finish(0);
+		await flush();
+		return harness.spawnCalls[0]?.args ?? [];
+	}
+	const valueAfter = (args: string[], flag: string): string | undefined => {
+		const i = args.indexOf(flag);
+		return i === -1 ? undefined : args[i + 1];
+	};
+
+	it('opts.model / opts.effort win over the settings defaults', async () => {
+		const args = await argsFor({ model: 'opus', effort: 'high' }, { effort: 'low' });
+		expect(valueAfter(args, '--model')).toBe('opus');
+		expect(valueAfter(args, '--effort')).toBe('high');
+	});
+
+	it('falls back to settings.claudeCode.modelOverride / effort when opts omit them', async () => {
+		const args = await argsFor({}, { effort: 'low' });
+		expect(valueAfter(args, '--model')).toBe('settings-model');
+		expect(valueAfter(args, '--effort')).toBe('low');
+	});
+
+	it('sends no --effort when nothing is set, and drops a value that fails the argv-safety pattern', async () => {
+		expect(await argsFor({})).not.toContain('--effort');
+		expect(await argsFor({ effort: 'High!' })).not.toContain('--effort');
+		expect(await argsFor({ effort: '--dangerous' })).not.toContain('--effort');
+	});
+
+	it('accepts bracketed Claude aliases such as sonnet[1m]', async () => {
+		expect(valueAfter(await argsFor({ model: 'sonnet[1m]' }), '--model')).toBe('sonnet[1m]');
+	});
+});
+
+describe('ClaudeCodeClient.streamChat — env isolation from the Codex provider', () => {
+	it('does not pass OPENAI_* / CODEX_* variables to the claude subprocess', async () => {
+		const saved = { OPENAI_API_KEY: process.env.OPENAI_API_KEY, CODEX_HOME: process.env.CODEX_HOME, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY };
+		process.env.OPENAI_API_KEY = 'sk-openai-not-real';
+		process.env.CODEX_HOME = '/tmp/codex-home';
+		process.env.ANTHROPIC_API_KEY = 'sk-ant-not-real';
+		try {
+			const harness = makeHarness();
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const client = new ClaudeCodeClient(harness.plugin as any, harness.io);
+			void client.streamChat(makeOpts({ messages: [{ role: 'user', content: 'x' }] }));
+			await flush();
+			const env = harness.spawnCalls[0]?.opts.env ?? {};
+			expect(env.OPENAI_API_KEY).toBeUndefined();
+			expect(env.CODEX_HOME).toBeUndefined();
+			expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-not-real');
+			harness.nextProc.finish(0);
+		} finally {
+			for (const [k, v] of Object.entries(saved)) {
+				if (v === undefined) delete process.env[k]; else process.env[k] = v;
+			}
 		}
 	});
 });

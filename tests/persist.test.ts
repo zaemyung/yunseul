@@ -371,3 +371,18 @@ describe('debouncedSaver', () => {
 		expect(JSON.parse(text!).updatedAt).toBe(7777);
 	});
 });
+
+describe('loadAllSessions — per-chat overrides and backend handles', () => {
+	it('accepts string/null overrides and codexThreadId, and skips a snapshot with a wrong-typed one', async () => {
+		const adapter = new MemoryAdapter();
+		const good = { ...sampleSnapshot('good'), modelOverride: 'opus', effortOverride: null, codexThreadId: 'thread-1' };
+		const bad = { ...sampleSnapshot('bad'), modelOverride: 42 };
+		adapter.files.set(sessionFilePath('good', TEST_SESSIONS_DIR), JSON.stringify(good));
+		adapter.files.set(sessionFilePath('bad', TEST_SESSIONS_DIR), JSON.stringify(bad));
+		const out = await loadAllSessions(adapter, TEST_SESSIONS_DIR);
+		expect(out.map((s) => s.id)).toEqual(['good']);
+		expect(out[0]?.modelOverride).toBe('opus');
+		expect(out[0]?.effortOverride).toBeNull();
+		expect(out[0]?.codexThreadId).toBe('thread-1');
+	});
+});

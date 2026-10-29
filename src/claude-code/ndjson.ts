@@ -14,7 +14,9 @@
 // wire each callback to its preferred surface.
 
 import { isObject } from '../util/guards';
+import { LineBuffer } from '../util/lineBuffer';
 import { STDOUT_BUFFER_MAX, STDOUT_LINE_MAX } from './constants';
+import { sanitizeSlashCommandNames } from './slash';
 
 /**
  * Callbacks fired by the NDJSON parser as it encounters known event
@@ -39,6 +41,53 @@ export interface NdjsonHandlers {
 	onApiRetry: (attempt: number | undefined) => void;
 	warn: (msg: string) => void;
 	debug: (msg: string) => void;
+	/**
+	 * Fired once per `system/init` that carries a well-formed
+	 * `slash_commands` array — the commands the CLI accepts in headless
+	 * mode (built-ins, skills, `.claude/commands/`). Already validated
+	 * and sorted by sanitizeSlashCommandNames. Optional so callers that
+	 * don't care (probes, tests) can omit it.
+	 */
+	onSlashCommands?: (names: string[]) => void;
+	/**
+	 * Fired on `system/compact_boundary` — the CLI finished a manual
+	 * (`/compact`) or automatic compaction. A compaction run emits NO
+	 * text deltas and an empty result, so this is the only signal the
+	 * user would otherwise see as a blank reply.
+	 */
+	onCompactBoundary?: (info: CompactBoundaryInfo) => void;
+}
+
+/**
+ * Normalized `compact_metadata` of a `system/compact_boundary` event.
+ * Every field is optional for forward compat with CLI changes.
+ */
+export interface CompactBoundaryInfo {
+	trigger: string | undefined;
+	preTokens: number | undefined;
+	postTokens: number | undefined;
+}
+
+/**
+ * Per-run bookkeeping for the "no streamed text" fallback.
+ *
+ * Local slash commands (`/context`, `/usage`, the "/help isn't available"
+ * notice, an unknown-command note, …) are answered by the CLI itself
+ * without an API round-trip. Their text arrives ONLY inside the
+ * `assistant` message and the `result` event — never as
+ * `content_block_delta`s, which is all the chat surface renders. We
+ * remember whether any text delta was seen and, if none was by the time
+ * `result` lands, emit the result text once through onText so the bubble
+ * is not left blank. Normal model turns stream every byte as deltas
+ * (`--include-partial-messages`), so the fallback never double-emits.
+ */
+export interface StreamTextState {
+	sawTextDelta: boolean;
+	assistantTexts: string[];
+}
+
+export function createStreamTextState(): StreamTextState {
+	return { sawTextDelta: false, assistantTexts: [] };
 }
 
 /**
@@ -66,67 +115,34 @@ export interface ResultEvent {
  * any final un-newlined trailing line.
  */
 export class NdjsonBuffer {
-	private buf = '';
-	private readonly decoder = new TextDecoder();
-	private readonly handlers: NdjsonHandlers;
-	private closed = false;
+	private readonly lines: LineBuffer;
+	private readonly textState = createStreamTextState();
 
 	constructor(handlers: NdjsonHandlers) {
-		this.handlers = handlers;
+		// Line splitting/caps live in util/lineBuffer.ts (shared with the
+		// Codex provider). Lines are dispatched in-loop so onText /
+		// onResult interleave in the order the CLI emitted them — the
+		// multi-chunk regression test depends on that.
+		this.lines = new LineBuffer(
+			{
+				onLine: (line) => parseStreamLine(line, handlers, this.textState),
+				onOversizeLine: (n) => handlers.debug(`claude-code: dropping oversize stdout line (${n} chars)`),
+				// Runaway upstream — abandon the buffer rather than stall
+				// the renderer; the close handler surfaces a non-zero exit.
+				onOverflow: () => handlers.warn('claude-code: stdout buffer exceeded cap; discarding'),
+			},
+			{ lineMax: STDOUT_LINE_MAX, bufferMax: STDOUT_BUFFER_MAX },
+		);
 	}
 
-	/**
-	 * Push one stdout chunk into the buffer. Dispatches one parseStreamLine
-	 * call per complete \n-terminated line. Fires events in-loop (not
-	 * batched) so onText / onResult interleave in the same order the CLI
-	 * emitted them — critical for the regression test that asserts
-	 * `tokens.equal(['Hello', ' world'])` on multi-chunk dispatch.
-	 */
+	/** Push one stdout chunk; dispatches one parse per complete line. */
 	push(chunk: Uint8Array | string): void {
-		if (this.closed) return;
-		const text = typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, { stream: true });
-		this.buf += text;
-		if (this.buf.length > STDOUT_BUFFER_MAX) {
-			// Runaway upstream — abandon the buffer rather than stall
-			// the renderer. The close handler will surface a non-zero
-			// exit if the CLI eventually quits.
-			this.handlers.warn('claude-code: stdout buffer exceeded cap; discarding');
-			this.buf = '';
-			return;
-		}
-		let newlineIdx = this.buf.indexOf('\n');
-		while (newlineIdx !== -1) {
-			// Tolerate Windows `\r\n` boundaries — trim() below will
-			// strip the stray CR.
-			const rawLine = this.buf.slice(0, newlineIdx);
-			this.buf = this.buf.slice(newlineIdx + 1);
-			const line = rawLine.trim();
-			if (line.length > 0 && line.length <= STDOUT_LINE_MAX) {
-				parseStreamLine(line, this.handlers);
-			} else if (line.length > STDOUT_LINE_MAX) {
-				this.handlers.debug(
-					`claude-code: dropping oversize stdout line (${line.length} chars)`,
-				);
-			}
-			newlineIdx = this.buf.indexOf('\n');
-		}
+		this.lines.push(chunk);
 	}
 
-	/**
-	 * Flush any trailing partial line that did not end with a newline.
-	 * Idempotent — subsequent calls are no-ops. Called once on the close
-	 * event so a CLI that exits without flushing its final line still
-	 * dispatches the final event.
-	 */
+	/** Dispatch a trailing un-newlined line once on close. Idempotent. */
 	flush(): void {
-		if (this.closed) return;
-		this.closed = true;
-		this.buf += this.decoder.decode();
-		const tail = this.buf.trim();
-		this.buf = '';
-		if (tail.length > 0 && tail.length <= STDOUT_LINE_MAX) {
-			parseStreamLine(tail, this.handlers);
-		}
+		this.lines.flush();
 	}
 }
 
@@ -140,8 +156,16 @@ export class NdjsonBuffer {
  * `content_block_stop`. The current chat surface only renders the text
  * deltas; tool calls are handled by the CLI itself and we don't surface
  * them in the bubble.
+ *
+ * `state` is the per-run StreamTextState shared across every line of one
+ * subprocess (NdjsonBuffer owns it). A caller parsing a single line in
+ * isolation may omit it and gets a fresh state.
  */
-export function parseStreamLine(line: string, handlers: NdjsonHandlers): void {
+export function parseStreamLine(
+	line: string,
+	handlers: NdjsonHandlers,
+	state: StreamTextState = createStreamTextState(),
+): void {
 	let event: unknown;
 	try {
 		event = JSON.parse(line);
@@ -161,12 +185,28 @@ export function parseStreamLine(line: string, handlers: NdjsonHandlers): void {
 		if (sid !== undefined) {
 			handlers.onSystemInit(sid);
 		}
+		// `slash_commands` lists what the CLI will expand in THIS mode
+		// (headless). Absent on older CLI builds → leave the cache alone.
+		if (handlers.onSlashCommands !== undefined) {
+			const names = sanitizeSlashCommandNames(event.slash_commands);
+			if (names !== null) handlers.onSlashCommands(names);
+		}
 		return;
 	}
 
 	if (type === 'system' && subtype === 'api_retry') {
 		const attempt = typeof event.attempt === 'number' ? event.attempt : undefined;
 		handlers.onApiRetry(attempt);
+		return;
+	}
+
+	if (type === 'system' && subtype === 'compact_boundary') {
+		const md = isObject(event.compact_metadata) ? event.compact_metadata : undefined;
+		handlers.onCompactBoundary?.({
+			trigger: md !== undefined ? stringOrUndef(md.trigger) : undefined,
+			preTokens: md !== undefined ? numberOrUndef(md.pre_tokens) : undefined,
+			postTokens: md !== undefined ? numberOrUndef(md.post_tokens) : undefined,
+		});
 		return;
 	}
 
@@ -179,8 +219,17 @@ export function parseStreamLine(line: string, handlers: NdjsonHandlers): void {
 		if (delta.type !== 'text_delta') return;
 		const text = stringOrUndef(delta.text);
 		if (text !== undefined && text.length > 0) {
+			state.sawTextDelta = true;
 			handlers.onText(text);
 		}
+		return;
+	}
+
+	if (type === 'assistant') {
+		// Only collected while no delta has streamed — the moment one
+		// does, the assistant payload is a duplicate of what onText
+		// already delivered and we stop accumulating.
+		if (!state.sawTextDelta) collectAssistantText(event, state);
 		return;
 	}
 
@@ -197,6 +246,18 @@ export function parseStreamLine(line: string, handlers: NdjsonHandlers): void {
 		const outputTokens = usage !== undefined && typeof usage.output_tokens === 'number'
 			? usage.output_tokens
 			: undefined;
+		// No-delta fallback (see StreamTextState). Only on a clean
+		// success: error results are surfaced by the lifecycle layer via
+		// the non-zero exit + stderr tail, and echoing `result` there would
+		// double-report. The text is emitted BEFORE onResult so the
+		// session sees "first token" before "completion meta".
+		if (!state.sawTextDelta && subtype === 'success' && event.is_error !== true) {
+			const fallback = pickFallbackText(stringOrUndef(event.result), state.assistantTexts);
+			if (fallback !== null) {
+				state.sawTextDelta = true;
+				handlers.onText(fallback);
+			}
+		}
 		handlers.onResult({
 			sessionId: sid,
 			totalCostUsd: cost,
@@ -210,6 +271,30 @@ export function parseStreamLine(line: string, handlers: NdjsonHandlers): void {
 	// handles them; we'd only surface them when we add UI for it.
 }
 
+/**
+ * Pull the text blocks out of an `assistant` event's
+ * `message.content[]`. Non-text blocks (tool_use, thinking) are skipped.
+ */
+function collectAssistantText(event: Record<string, unknown>, state: StreamTextState): void {
+	const message = isObject(event.message) ? event.message : undefined;
+	const content = message !== undefined && Array.isArray(message.content) ? message.content : [];
+	for (const block of content) {
+		if (!isObject(block) || block.type !== 'text') continue;
+		const text = stringOrUndef(block.text);
+		if (text !== undefined && text.length > 0) state.assistantTexts.push(text);
+	}
+}
+
+function pickFallbackText(resultText: string | undefined, assistantTexts: string[]): string | null {
+	if (resultText !== undefined && resultText.trim().length > 0) return resultText;
+	const joined = assistantTexts.join('\n\n');
+	return joined.trim().length > 0 ? joined : null;
+}
+
 function stringOrUndef(x: unknown): string | undefined {
 	return typeof x === 'string' ? x : undefined;
+}
+
+function numberOrUndef(x: unknown): number | undefined {
+	return typeof x === 'number' && Number.isFinite(x) ? x : undefined;
 }

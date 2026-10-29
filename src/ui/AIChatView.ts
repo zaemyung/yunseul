@@ -28,6 +28,8 @@ import {
 	runSend,
 	type SendControllerHost,
 } from './SendController';
+import { classifyLocalSlashCommand, parseSlashCommand } from '../claude-code/slash';
+import { runEffortCommand, runModelCommand } from '../chat/localCommands';
 
 export const VIEW_TYPE_AI_CHAT = 'yunseul-chat';
 
@@ -140,6 +142,7 @@ export class AIChatView extends ItemView {
 			const s = this.getActiveSession();
 			if (s !== undefined) this.headerHandle?.setStatus(s);
 			this.composerHandle?.updateContextRow();
+			this.composerHandle?.updateSlashHint();
 		});
 
 		this.composerHandle?.focus();
@@ -301,6 +304,40 @@ export class AIChatView extends ItemView {
 			const composer = this.composerHandle;
 			const text = composer?.getValue() ?? '';
 			if (text.trim().length === 0) return;
+			// A few slash commands are Yunseul's to handle, for every
+			// provider (see classifyLocalSlashCommand): /clear maps onto New
+			// chat so transcript and backend session stay in step; /model
+			// and /effort set per-chat overrides that the session re-sends
+			// as argv on every turn. Everything else goes to the backend
+			// (Claude Code expands its own commands from there).
+			const parsed = parseSlashCommand(text);
+			const local = parsed === null ? null : classifyLocalSlashCommand(parsed.name);
+			if (local !== null) {
+				const clearComposer = (): void => {
+					if (composer === null) return;
+					composer.setValue('');
+					composer.resize();
+					composer.frameEl.removeClass('is-typing');
+				};
+				if (local.kind === 'new-chat') {
+					clearComposer();
+					await this.startNewSession();
+					return;
+				}
+				const outcome = local.kind === 'model'
+					? runModelCommand(session, this.plugin.settings, parsed?.args ?? '')
+					: runEffortCommand(session, this.plugin.settings, parsed?.args ?? '');
+				// A rejected value stays in the composer for correction.
+				if (outcome.ok) clearComposer();
+				if (outcome.changed) {
+					session.updatedAt = Date.now();
+					this.plugin.persistSession(session);
+					this.headerHandle?.setStatus(session);
+				}
+				// Informational notices (usage, validation) stay up longer.
+				new Notice(outcome.notice, outcome.changed ? 4000 : 10000);
+				return;
+			}
 			if (composer !== null) {
 				composer.setValue('');
 				composer.resize();

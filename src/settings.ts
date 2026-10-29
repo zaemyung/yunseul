@@ -10,6 +10,9 @@ import type YunseulPlugin from './main';
 import { runHealthCheck } from './lmstudio/health';
 import { IndexPromptModal } from './ui/IndexPromptModal';
 import { isObject } from './util/guards';
+import { effortLevelsFor, sanitizeSlashCommandNames } from './claude-code/slash';
+import { MODEL_OVERRIDE_PATTERN } from './claude-code/constants';
+import { providerDefaultModel, providerDefaultModelLabel } from './chat/localCommands';
 
 // Settings shape for the plugin. v1 introduces a grouped shape — the
 // historical flat layout (every knob hanging off the root object) had
@@ -40,7 +43,7 @@ export type IndexPromptState = 'unanswered' | 'declined' | 'accepted';
  * and rides on the user's existing Claude Code authentication. New
  * providers slot in here and behind the LLMClient factory.
  */
-export type Provider = 'lm-studio' | 'claude-code';
+export type Provider = 'lm-studio' | 'claude-code' | 'codex';
 
 export interface YunseulSettings {
 	schemaVersion: 1;
@@ -60,6 +63,26 @@ export interface YunseulSettings {
 	claudeCode: {
 		binary: string;
 		modelOverride: string;
+		// Default reasoning effort passed as `claude --effort <level>`.
+		// Empty = CLI default. A chat's `/effort` overrides it per chat.
+		effort: string;
+		enableWrites: boolean;
+		// Runtime cache, not a user knob: the slash commands the CLI
+		// advertised in its last headless `system/init` event. Feeds the
+		// composer's `/` popover. Lives in data.json so the popover works
+		// right after launch; it is rewritten only when the list changes
+		// (normally once per CLI upgrade), accepting that two synced
+		// devices with different CLI versions would alternate it.
+		knownSlashCommands: string[];
+	};
+	// Codex CLI provider knobs. Same contract as claudeCode: empty
+	// `binary` resolves `codex` on PATH; empty `model` / `effort` defer to
+	// the user's ~/.codex/config.toml; writes default to off, which maps
+	// to Codex's read-only sandbox.
+	codex: {
+		binary: string;
+		model: string;
+		effort: string;
 		enableWrites: boolean;
 	};
 	chat: {
@@ -107,6 +130,14 @@ export const DEFAULT_SETTINGS: YunseulSettings = {
 	claudeCode: {
 		binary: '',
 		modelOverride: '',
+		effort: '',
+		enableWrites: false,
+		knownSlashCommands: [],
+	},
+	codex: {
+		binary: '',
+		model: '',
+		effort: '',
 		enableWrites: false,
 	},
 	chat: {
@@ -242,8 +273,13 @@ export function migrateSettingsWithFlag(raw: unknown): MigrationResult {
 		claudeCode: {
 			binary: pickStr(v0.claudeBinary, DEFAULT_SETTINGS.claudeCode.binary),
 			modelOverride: pickStr(v0.claudeModel, DEFAULT_SETTINGS.claudeCode.modelOverride),
+			effort: DEFAULT_SETTINGS.claudeCode.effort,
 			enableWrites: pickBool(v0.claudeCodeEnableWrites, DEFAULT_SETTINGS.claudeCode.enableWrites),
+			// No v0 ancestor — the cache did not exist before the grouped shape.
+			knownSlashCommands: [...DEFAULT_SETTINGS.claudeCode.knownSlashCommands],
 		},
+		// Codex arrived after the grouped shape; nothing to lift.
+		codex: { ...DEFAULT_SETTINGS.codex },
 		chat: {
 			suggestions: pickStrArr(v0.suggestions, DEFAULT_SETTINGS.chat.suggestions),
 			downloadFolder: pickStr(v0.downloadFolder, DEFAULT_SETTINGS.chat.downloadFolder),
@@ -332,7 +368,7 @@ function mergeV1Defaults(raw: Record<string, unknown>): MigrationResult {
 		return out;
 	};
 	const pickProviderM = (v: unknown, fb: Provider): Provider => {
-		if (v === 'lm-studio' || v === 'claude-code') return v;
+		if (v === 'lm-studio' || v === 'claude-code' || v === 'codex') return v;
 		mark();
 		return fb;
 	};
@@ -341,12 +377,26 @@ function mergeV1Defaults(raw: Record<string, unknown>): MigrationResult {
 		mark();
 		return fb;
 	};
+	// The slash-command cache is validated with the same name rule the
+	// NDJSON parser applies, so a hand-edited data.json can never feed
+	// arbitrary strings into the composer popover. Dropping an entry (or
+	// the whole value) counts as a heal.
+	const pickSlashCommandsM = (v: unknown, fb: readonly string[]): string[] => {
+		const names = sanitizeSlashCommandNames(v);
+		if (names === null) {
+			mark();
+			return [...fb];
+		}
+		if (Array.isArray(v) && names.length !== v.length) mark();
+		return names;
+	};
 	// schemaVersion must be exactly 1 on a canonical v1 store. If the
 	// caller routed a forward-compat value (>=1) into here, that's a
 	// migration even though we kept the user's other fields.
 	if (raw.schemaVersion !== 1) mark();
 	const lmStudio = pickSub(raw.lmStudio);
 	const claudeCode = pickSub(raw.claudeCode);
+	const codex = pickSub(raw.codex);
 	const chat = pickSub(raw.chat);
 	const index = pickSub(raw.index);
 	const privacy = pickSub(raw.privacy);
@@ -373,7 +423,18 @@ function mergeV1Defaults(raw: Record<string, unknown>): MigrationResult {
 				claudeCode.modelOverride,
 				DEFAULT_SETTINGS.claudeCode.modelOverride,
 			),
+			effort: pickStrM(claudeCode.effort, DEFAULT_SETTINGS.claudeCode.effort),
 			enableWrites: pickBoolM(claudeCode.enableWrites, DEFAULT_SETTINGS.claudeCode.enableWrites),
+			knownSlashCommands: pickSlashCommandsM(
+				claudeCode.knownSlashCommands,
+				DEFAULT_SETTINGS.claudeCode.knownSlashCommands,
+			),
+		},
+		codex: {
+			binary: pickStrM(codex.binary, DEFAULT_SETTINGS.codex.binary),
+			model: pickStrM(codex.model, DEFAULT_SETTINGS.codex.model),
+			effort: pickStrM(codex.effort, DEFAULT_SETTINGS.codex.effort),
+			enableWrites: pickBoolM(codex.enableWrites, DEFAULT_SETTINGS.codex.enableWrites),
 		},
 		chat: {
 			suggestions: pickStrArrM(chat.suggestions, DEFAULT_SETTINGS.chat.suggestions),
@@ -411,7 +472,11 @@ function cloneDefaults(): YunseulSettings {
 		schemaVersion: 1,
 		provider: DEFAULT_SETTINGS.provider,
 		lmStudio: { ...DEFAULT_SETTINGS.lmStudio },
-		claudeCode: { ...DEFAULT_SETTINGS.claudeCode },
+		claudeCode: {
+			...DEFAULT_SETTINGS.claudeCode,
+			knownSlashCommands: [...DEFAULT_SETTINGS.claudeCode.knownSlashCommands],
+		},
+		codex: { ...DEFAULT_SETTINGS.codex },
 		chat: {
 			suggestions: [...DEFAULT_SETTINGS.chat.suggestions],
 			downloadFolder: DEFAULT_SETTINGS.chat.downloadFolder,
@@ -460,7 +525,7 @@ function pickStrArr(v: unknown, fallback: readonly string[]): string[] {
 }
 
 function pickProvider(v: unknown, fallback: Provider): Provider {
-	if (v === 'lm-studio' || v === 'claude-code') return v;
+	if (v === 'lm-studio' || v === 'claude-code' || v === 'codex') return v;
 	return fallback;
 }
 
@@ -505,17 +570,18 @@ export class YunseulSettingTab extends PluginSettingTab {
 			.setName('LLM provider')
 			.setDesc(
 				claudeCodeAvailable
-					? 'Which backend Yunseul should talk to. LM Studio covers OpenAI-compatible local servers; Claude Code shells out to your local `claude` CLI and rides on its auth.'
-					: 'Which backend Yunseul should talk to. Claude Code is disabled because it requires desktop Obsidian.',
+					? 'Which backend Yunseul should talk to. LM Studio covers OpenAI-compatible local servers; Claude Code and Codex shell out to your local `claude` / `codex` CLI and ride on its login.'
+					: 'Which backend Yunseul should talk to. Claude Code and Codex are disabled because they require desktop Obsidian.',
 			)
 			.addDropdown((dropdown) => {
 				dropdown.addOption('lm-studio', 'LM Studio (OpenAI-compatible)');
 				if (claudeCodeAvailable) {
 					dropdown.addOption('claude-code', 'Claude Code (CLI subprocess)');
+					dropdown.addOption('codex', 'Codex (CLI subprocess)');
 				}
 				dropdown.setValue(this.plugin.settings.provider);
 				dropdown.onChange(async (v) => {
-					if (v === 'lm-studio' || (v === 'claude-code' && claudeCodeAvailable)) {
+					if (v === 'lm-studio' || ((v === 'claude-code' || v === 'codex') && claudeCodeAvailable)) {
 						this.plugin.settings.provider = v;
 						await this.plugin.saveSettings();
 						this.plugin.rebuildLLMClient();
@@ -534,6 +600,8 @@ export class YunseulSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.provider === 'claude-code') {
 			this.renderClaudeCodeSection(containerEl);
+		} else if (this.plugin.settings.provider === 'codex') {
+			this.renderCodexSection(containerEl);
 		} else {
 			this.renderLMStudioSection(containerEl);
 		}
@@ -824,6 +892,147 @@ export class YunseulSettingTab extends PluginSettingTab {
 	}
 
 	/**
+	 * Codex section. Same shape as the Claude Code section: binary path,
+	 * default model and effort (both overridable per chat with /model and
+	 * /effort), the writes toggle (maps to Codex's workspace-write
+	 * sandbox), and a `codex --version` probe. Auth stays in the user's
+	 * Codex install (`codex login`).
+	 */
+	private renderCodexSection(containerEl: HTMLElement): void {
+		this.heading(containerEl, 'Codex');
+
+		new Setting(containerEl)
+			.setName('Codex binary path')
+			.setDesc('Absolute path to the `codex` executable. Leave blank to use whatever `codex` resolves to on PATH.')
+			.addText((text) =>
+				text
+					.setPlaceholder('codex — falls back to PATH')
+					.setValue(this.plugin.settings.codex.binary)
+					.onChange(async (v) => {
+						this.plugin.settings.codex.binary = v.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Model')
+			.setDesc('Optional. Passed as `codex -m <id>`. Blank uses the model from your ~/.codex/config.toml. `/model` in a chat overrides this for that chat.')
+			.addText((text) =>
+				text
+					.setPlaceholder('(use Codex\'s configured model)')
+					.setValue(this.plugin.settings.codex.model)
+					.onChange(async (v) => {
+						const id = v.trim();
+						if (!this.validModelId(id)) return;
+						this.plugin.settings.codex.model = id;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Effort')
+			.setDesc('Optional default reasoning effort (`model_reasoning_effort`): none, minimal, low, medium, high, or xhigh. Blank uses your Codex config. `/effort` in a chat overrides this for that chat.')
+			.addText((text) =>
+				text
+					.setPlaceholder('(Codex config default)')
+					.setValue(this.plugin.settings.codex.effort)
+					.onChange(async (v) => {
+						const level = v.trim().toLowerCase();
+						if (!this.validEffort('codex', level)) return;
+						this.plugin.settings.codex.effort = level;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Enable file writes')
+			.setDesc('When on, Codex runs with its workspace-write sandbox and can modify files in your vault. Off by default — read-only sandbox.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.codex.enableWrites).onChange(async (v) => {
+					this.plugin.settings.codex.enableWrites = v;
+					await this.plugin.saveSettings();
+					if (v) {
+						new Notice(
+							'Codex can now modify files in your vault. Disable this in Settings if you do not need it.',
+							8000,
+						);
+					}
+				}),
+			);
+
+		this.renderCliProbe(containerEl, 'codex');
+
+		const help = containerEl.createDiv({ cls: 'yunseul-help' });
+		help.createEl('span', { text: 'Yunseul uses your existing Codex login (`codex login`). Prompts and vault excerpts are sent to OpenAI through the CLI.' });
+	}
+
+	/**
+	 * Model/effort fields are free text; reject values the clients would
+	 * silently drop at send time (argv-safety pattern, per-provider level
+	 * list) so the status strip never shows a model that is not used.
+	 * Returns true when the value may be stored. Blank always may.
+	 */
+	private validModelId(id: string): boolean {
+		if (id.length === 0 || MODEL_OVERRIDE_PATTERN.test(id)) return true;
+		new Notice('Model ids may only contain letters, digits, and . _ : / - [ ] with no spaces. Not saved.');
+		return false;
+	}
+
+	private validEffort(provider: Provider, level: string): boolean {
+		const levels = effortLevelsFor(provider);
+		if (level.length === 0 || levels.includes(level)) return true;
+		new Notice(`Effort must be one of: ${levels.join(', ')}. Not saved.`);
+		return false;
+	}
+
+	/**
+	 * "Test connection" row for a CLI-backed provider: runs `<binary>
+	 * --version` through the active client's probe and pushes the result
+	 * into the plugin-level connection state so the chat banner reflects
+	 * reality (provider-aware copy: not-found, not-logged-in, …).
+	 */
+	private renderCliProbe(containerEl: HTMLElement, binaryName: string): void {
+		let cliStatus: HTMLDivElement | null = null;
+		new Setting(containerEl)
+			.setName('Test connection')
+			.setDesc(`Runs \`${binaryName} --version\` to confirm the CLI is reachable. Does not check auth.`)
+			.addButton((btn) =>
+				btn
+					.setButtonText('Test')
+					.onClick(async () => {
+						btn.setDisabled(true);
+						btn.setButtonText('Testing...');
+						try {
+							const result = await this.plugin.lmClient.probe();
+							new Notice(result.message, 6000);
+							this.plugin.updateConnectionState({
+								state: result.ok ? 'ready' : 'offline',
+								message: result.message,
+								kind: result.kind,
+							});
+							if (cliStatus !== null) {
+								cliStatus.setText(`Last result: ${result.message}`);
+								cliStatus.removeClass('yunseul-status-ok', 'yunseul-status-bad');
+								cliStatus.addClass(result.ok ? 'yunseul-status-ok' : 'yunseul-status-bad');
+							}
+						} finally {
+							btn.setDisabled(false);
+							btn.setButtonText('Test');
+						}
+					}),
+			);
+		cliStatus = containerEl.createDiv({
+			cls: 'yunseul-test-status',
+			attr: { role: 'status', 'aria-live': 'polite' },
+		});
+		const initialState = this.plugin.getConnectionState().state;
+		if (initialState !== 'unknown') {
+			cliStatus.setText(`Last result: ${initialState === 'ready' ? 'CLI reachable' : 'Offline / not found'}`);
+			cliStatus.addClass(initialState === 'ready' ? 'yunseul-status-ok' : 'yunseul-status-bad');
+		}
+	}
+
+	/**
 	 * Claude Code section. Surfaces the binary path override, optional
 	 * model override, the writes toggle (with a strong warning), and a
 	 * probe button that runs `claude --version` to confirm the CLI is
@@ -854,7 +1063,24 @@ export class YunseulSettingTab extends PluginSettingTab {
 					.setPlaceholder('(use Claude Code\'s default)')
 					.setValue(this.plugin.settings.claudeCode.modelOverride)
 					.onChange(async (v) => {
-						this.plugin.settings.claudeCode.modelOverride = v.trim();
+						const id = v.trim();
+						if (!this.validModelId(id)) return;
+						this.plugin.settings.claudeCode.modelOverride = id;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Effort')
+			.setDesc('Optional default reasoning effort, passed as `claude --effort <level>`: low, medium, high, xhigh, or max. Blank uses the CLI default. `/effort` in a chat overrides this for that chat.')
+			.addText((text) =>
+				text
+					.setPlaceholder('(CLI default)')
+					.setValue(this.plugin.settings.claudeCode.effort)
+					.onChange(async (v) => {
+						const level = v.trim().toLowerCase();
+						if (!this.validEffort('claude-code', level)) return;
+						this.plugin.settings.claudeCode.effort = level;
 						await this.plugin.saveSettings();
 					}),
 			);
@@ -875,49 +1101,7 @@ export class YunseulSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		let cliStatus: HTMLDivElement | null = null;
-		new Setting(containerEl)
-			.setName('Test connection')
-			.setDesc('Runs `claude --version` to confirm the CLI is reachable. Does not check auth.')
-			.addButton((btn) =>
-				btn
-					.setButtonText('Test')
-					.onClick(async () => {
-						btn.setDisabled(true);
-						btn.setButtonText('Testing...');
-						try {
-							const result = await this.plugin.lmClient.probe();
-							new Notice(result.message, 6000);
-							// Update the plugin-level connection state so the
-							// chat banner reflects reality. We carry kind +
-							// message into the envelope so the banner renders
-							// provider-aware actionable text (not-found,
-							// not-logged-in, etc.) instead of a generic string.
-							this.plugin.updateConnectionState({
-								state: result.ok ? 'ready' : 'offline',
-								message: result.message,
-								kind: result.kind,
-							});
-							if (cliStatus !== null) {
-								cliStatus.setText(`Last result: ${result.message}`);
-								cliStatus.removeClass('yunseul-status-ok', 'yunseul-status-bad');
-								cliStatus.addClass(result.ok ? 'yunseul-status-ok' : 'yunseul-status-bad');
-							}
-						} finally {
-							btn.setDisabled(false);
-							btn.setButtonText('Test');
-						}
-					}),
-			);
-		cliStatus = containerEl.createDiv({
-			cls: 'yunseul-test-status',
-			attr: { role: 'status', 'aria-live': 'polite' },
-		});
-		const initialState = this.plugin.getConnectionState().state;
-		if (initialState !== 'unknown') {
-			cliStatus.setText(`Last result: ${initialState === 'ready' ? 'CLI reachable' : 'Offline / not found'}`);
-			cliStatus.addClass(initialState === 'ready' ? 'yunseul-status-ok' : 'yunseul-status-bad');
-		}
+		this.renderCliProbe(containerEl, 'claude');
 
 		const help = containerEl.createDiv({ cls: 'yunseul-help' });
 		help.createEl('span', { text: 'Yunseul uses your existing Claude Code login. See ' });
@@ -1048,13 +1232,10 @@ export class YunseulSettingTab extends PluginSettingTab {
 
 		const modelCol = grid.createDiv({ cls: 'yunseul-settings-summary-col' });
 		modelCol.createSpan({ cls: 'yunseul-settings-summary-col-label', text: 'Model' });
-		const modelValue = this.plugin.settings.provider === 'claude-code'
-			? (this.plugin.settings.claudeCode.modelOverride.length > 0
-				? this.plugin.settings.claudeCode.modelOverride
-				: 'claude (default)')
-			: (this.plugin.settings.lmStudio.chatModel.length > 0
-				? this.plugin.settings.lmStudio.chatModel
-				: '(no model)');
+		const configuredModel = providerDefaultModel(this.plugin.settings);
+		const modelValue = configuredModel.length > 0
+			? configuredModel
+			: providerDefaultModelLabel(this.plugin.settings.provider);
 		modelCol.createSpan({
 			cls: 'yunseul-settings-summary-col-value',
 			text: modelValue,

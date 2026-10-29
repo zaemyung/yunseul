@@ -24,7 +24,10 @@ function makeSettings(): YunseulSettings {
 			binary: '',
 			modelOverride: '',
 			enableWrites: false,
+			effort: '',
+			knownSlashCommands: [],
 		},
+		codex: { binary: '', model: '', effort: '', enableWrites: false },
 		chat: {
 			suggestions: [],
 			downloadFolder: 'AI Chats',

@@ -21,11 +21,11 @@ import { redactSecrets } from '../util/redact';
 import type { StreamChatOpts, StreamCompletionMeta } from '../llm/types';
 import { assembleArgs } from './argv';
 import type { ClaudeCodeIO } from './io';
-import { MODEL_OVERRIDE_PATTERN, SESSION_ID_PATTERN } from './constants';
+import { EFFORT_PATTERN, MODEL_OVERRIDE_PATTERN, SESSION_ID_PATTERN } from './constants';
 import { dispatchTerminate } from './dispatch';
-import { buildSafeEnv } from './env';
+import { CLAUDE_ENV_PREFIXES, buildSafeEnv } from './env';
 import { runSubprocess, type LiveProc } from './lifecycle';
-import { NdjsonBuffer } from './ndjson';
+import { NdjsonBuffer, type CompactBoundaryInfo } from './ndjson';
 import { readSessionIdFromExtras, splitMessages } from './splitMessages';
 import { cleanupSysPromptFile, writeSysPromptFile } from './sysprompt';
 
@@ -78,7 +78,17 @@ export async function streamChat(deps: StreamChatDeps, opts: StreamChatOpts): Pr
 	// argv flag here. Rejected values warn-log and start a fresh session
 	// or fall back to the CLI's default model respectively.
 	const priorSessionId = validateSessionId(readSessionIdFromExtras(opts.extras), deps.plugin);
-	const modelOverride = validateModelOverride(settings.claudeCode.modelOverride.trim(), deps.plugin);
+	// The session passes the effective model/effort (its per-chat /model
+	// and /effort overrides already folded in). Direct callers that omit
+	// them fall back to the settings defaults.
+	const modelOverride = validateModelOverride(
+		firstNonEmpty(opts.model, settings.claudeCode.modelOverride),
+		deps.plugin,
+	);
+	const effort = validateEffort(
+		firstNonEmpty(opts.effort, settings.claudeCode.effort),
+		deps.plugin,
+	);
 
 	// Split messages into system prompt + user prompt body. PromptAssembler
 	// emits a leading system message (default prompt + injection guard)
@@ -102,6 +112,7 @@ export async function streamChat(deps: StreamChatDeps, opts: StreamChatOpts): Pr
 		sysPromptPath,
 		priorSessionId,
 		modelOverride,
+		effort,
 		enableWrites: settings.claudeCode.enableWrites,
 	});
 
@@ -121,7 +132,7 @@ export async function streamChat(deps: StreamChatDeps, opts: StreamChatOpts): Pr
 			binary,
 			args,
 			cwd,
-			env: buildSafeEnv(),
+			env: buildSafeEnv(CLAUDE_ENV_PREFIXES),
 			signal: opts.signal,
 			stdinPayload: userPrompt,
 		},
@@ -160,6 +171,19 @@ function validateModelOverride(raw: string, plugin: YunseulPlugin): string | nul
 	return null;
 }
 
+function validateEffort(raw: string, plugin: YunseulPlugin): string | null {
+	if (raw.length === 0) return null;
+	if (EFFORT_PATTERN.test(raw)) return raw;
+	plugin.logger.warn(`claude-code: ignoring invalid effort "${raw}"`);
+	return null;
+}
+
+function firstNonEmpty(preferred: string | undefined, fallback: string | undefined): string {
+	const a = (preferred ?? '').trim();
+	if (a.length > 0) return a;
+	return (fallback ?? '').trim();
+}
+
 function buildNdjsonBuffer(
 	plugin: YunseulPlugin,
 	opts: StreamChatOpts,
@@ -170,8 +194,21 @@ function buildNdjsonBuffer(
 	// hazard-path suite at claude-code.test.ts:1011) still see their
 	// stub fire. A `const warn = plugin.logger.warn` captured once
 	// would miss those later stubs.
+	// Compaction can also fire automatically in the middle of a reply (long
+	// --resume sessions). Track what has reached the bubble so the notice
+	// is set off from surrounding prose on both sides instead of being
+	// glued onto it — otherwise the whole following answer would render
+	// inside the notice's blockquote.
+	let emittedText = false;
+	let separatorPending = false;
+	const emit = (text: string): void => {
+		const sep = separatorPending ? '\n\n' : '';
+		separatorPending = false;
+		emittedText = true;
+		opts.onToken(sep + text);
+	};
 	return new NdjsonBuffer({
-		onText: (text) => opts.onToken(text),
+		onText: emit,
 		onSystemInit: (sid) => {
 			meta.sessionId = sid;
 			opts.onMeta?.({ sessionId: sid });
@@ -191,9 +228,31 @@ function buildNdjsonBuffer(
 			}
 			plugin.logger.warn(`claude-code api_retry: attempt=${attempt ?? '?'}`);
 		},
+		// The headless command list feeds the composer's `/` popover. The
+		// plugin persists it so the popover works before the next init.
+		onSlashCommands: (names) => plugin.rememberSlashCommands(names),
+		// A manual `/compact` run streams no text; render a one-line notice
+		// as the reply so the user sees it did something. Text that follows
+		// (automatic compaction) gets a blank line in front of it.
+		onCompactBoundary: (info) => {
+			const notice = formatCompactNotice(info);
+			emit(emittedText ? `\n\n${notice}` : notice);
+			separatorPending = true;
+		},
 		warn: (m) => plugin.logger.warn(m),
 		debug: (m) => plugin.logger.debug(m),
 	});
+}
+
+function formatCompactNotice(info: CompactBoundaryInfo): string {
+	const detail = info.preTokens !== undefined && info.postTokens !== undefined
+		? ` (${formatTokenCount(info.preTokens)} → ${formatTokenCount(info.postTokens)} tokens)`
+		: '';
+	return `> Conversation compacted${detail}.`;
+}
+
+function formatTokenCount(n: number): string {
+	return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
 function logStderrLines(

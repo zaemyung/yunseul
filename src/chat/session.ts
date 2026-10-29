@@ -12,6 +12,8 @@ import type { SessionSnapshot } from './persist';
 import { tokenize } from '../index/bm25';
 import type { RetrievalResult } from '../index/retriever';
 import { isAbortError } from '../util/guards';
+import { providerDefaultEffort, providerDefaultModel } from './localCommands';
+import { effortLevelsFor } from '../claude-code/slash';
 
 // Minimum number of tokens (post-tokenization) before we bother
 // querying the retriever. Below this, BM25 against the vault is
@@ -60,6 +62,27 @@ export class ChatSession {
 	 *   - a "New chat" reset.
 	 */
 	claudeCodeSessionId: string | null;
+	/**
+	 * Codex thread id, captured from `thread.started` on the first send
+	 * through the Codex provider and passed back as `codex exec resume
+	 * <id>`. Same lifecycle rules as claudeCodeSessionId.
+	 */
+	codexThreadId: string | null;
+	/**
+	 * Per-chat `/model` and `/effort` overrides. Null = use the provider's
+	 * configured default (Settings), which may itself be empty = backend
+	 * default. Persisted in the snapshot so a reload keeps the choice;
+	 * resolved by effectiveModel() / effectiveEffort() on every send.
+	 *
+	 * They belong to the provider that was active when they were set
+	 * (`overrideProvider`): a Claude model name must not be handed to
+	 * Codex after a provider switch. Overrides for a different provider
+	 * are simply ignored (and apply again if the user switches back);
+	 * setting a new override under another provider drops the old pair.
+	 */
+	modelOverride: string | null;
+	effortOverride: string | null;
+	overrideProvider: string | null;
 	private abortCtrl: AbortController | null;
 	private readonly plugin: YunseulPlugin;
 	private streamingAssistantIdx: number | null;
@@ -76,6 +99,10 @@ export class ChatSession {
 		this.history = init?.history ?? [];
 		this.boundFile = null;
 		this.claudeCodeSessionId = init?.claudeCodeSessionId ?? null;
+		this.codexThreadId = init?.codexThreadId ?? null;
+		this.modelOverride = init?.modelOverride ?? null;
+		this.effortOverride = init?.effortOverride ?? null;
+		this.overrideProvider = init?.overrideProvider ?? null;
 		this.abortCtrl = null;
 		this.streamingAssistantIdx = null;
 	}
@@ -86,6 +113,53 @@ export class ChatSession {
 
 	getLastRetrieval(): RetrievalResult[] {
 		return this.lastRetrieval;
+	}
+
+	/** Model the next send will use: chat override, else Settings default ('' = backend default). */
+	effectiveModel(): string {
+		const settings = this.plugin.settings;
+		if (this.modelOverride !== null && this.overrideProvider === settings.provider) {
+			return this.modelOverride;
+		}
+		return providerDefaultModel(settings);
+	}
+
+	/** Effort the next send will use: chat override, else Settings default ('' = backend default). */
+	effectiveEffort(): string {
+		const settings = this.plugin.settings;
+		if (this.effortOverride !== null && this.overrideProvider === settings.provider) {
+			// A hand-edited snapshot could carry a level this backend does
+			// not accept; fall back rather than fail every send.
+			const levels = effortLevelsFor(settings.provider);
+			if (levels.length === 0 || levels.includes(this.effortOverride)) return this.effortOverride;
+		}
+		return providerDefaultEffort(settings);
+	}
+
+	/**
+	 * Set per-chat overrides on behalf of `provider`. Switching the owning
+	 * provider discards the previous pair first, so a Claude effort level
+	 * never lingers next to a Codex model id. `undefined` leaves a field
+	 * untouched; `null` clears it.
+	 */
+	setOverrides(provider: string, patch: { model?: string | null; effort?: string | null }): void {
+		if (this.overrideProvider !== provider) {
+			this.modelOverride = null;
+			this.effortOverride = null;
+			this.overrideProvider = provider;
+		}
+		if (patch.model !== undefined) this.modelOverride = patch.model;
+		if (patch.effort !== undefined) this.effortOverride = patch.effort;
+	}
+
+	/**
+	 * Forget every backend-side conversation handle. Used when a send
+	 * fails before producing content (the handle may point at a half
+	 * state) and when the user aborts before the first token.
+	 */
+	private clearBackendSessionIds(): void {
+		this.claudeCodeSessionId = null;
+		this.codexThreadId = null;
 	}
 
 	async send(text: string, ctx: SendContext): Promise<void> {
@@ -100,11 +174,12 @@ export class ChatSession {
 		}
 
 		const settings = this.plugin.settings;
-		// LM Studio requires an explicit model id; Claude Code's CLI
-		// picks its own model. We gate the no-model error path on
-		// provider so claude-code users don't see a "select a model"
-		// message that doesn't apply to them.
-		const model = settings.lmStudio.chatModel.trim();
+		// Effective model/effort for this send: the chat's /model and
+		// /effort overrides win, then the provider's Settings default, then
+		// the backend's own default (empty). LM Studio is the one backend
+		// that cannot pick a model for itself, so only it errors on empty.
+		const model = this.effectiveModel();
+		const effort = this.effectiveEffort();
 		if (settings.provider === 'lm-studio' && model.length === 0) {
 			ctx.onError(await buildNoChatModelError(this.plugin));
 			return;
@@ -148,7 +223,9 @@ export class ChatSession {
 			history: trimRounds(this.history, settings.lmStudio.maxConversationRounds),
 			maxChars: settings.lmStudio.maxContextChars,
 			provider: settings.provider,
-			claudeCodeWritesEnabled: settings.claudeCode.enableWrites,
+			writesEnabled: settings.provider === 'codex'
+				? settings.codex.enableWrites
+				: settings.claudeCode.enableWrites,
 		});
 
 		const abortCtrl = new AbortController();
@@ -176,6 +253,9 @@ export class ChatSession {
 		if (this.claudeCodeSessionId !== null) {
 			extras.claudeCodeSessionId = this.claudeCodeSessionId;
 		}
+		if (this.codexThreadId !== null) {
+			extras.codexThreadId = this.codexThreadId;
+		}
 
 		// onMeta is the provider-neutral hook for "I learned something
 		// about this stream mid-flight". Today only Claude Code uses it,
@@ -186,10 +266,16 @@ export class ChatSession {
 		// because no assistant content has arrived.
 		const onMeta = (meta: StreamCompletionMeta): void => {
 			userMsgCommitted = true;
+			let changed = false;
 			if (meta.sessionId !== undefined && meta.sessionId !== this.claudeCodeSessionId) {
 				this.claudeCodeSessionId = meta.sessionId;
-				this.plugin.persistSession(this);
+				changed = true;
 			}
+			if (meta.codexThreadId !== undefined && meta.codexThreadId !== this.codexThreadId) {
+				this.codexThreadId = meta.codexThreadId;
+				changed = true;
+			}
+			if (changed) this.plugin.persistSession(this);
 		};
 
 		// Lazy-init the assistant placeholder so a failed connection
@@ -227,7 +313,8 @@ export class ChatSession {
 			await this.plugin.lmClient.streamChat({
 				messages: toRequestMessages(messages),
 				signal: abortCtrl.signal,
-				model,
+				model: model.length > 0 ? model : undefined,
+				effort: effort.length > 0 ? effort : undefined,
 				temperature: settings.lmStudio.temperature,
 				extras,
 				onToken: onTokenInternal,
@@ -245,7 +332,7 @@ export class ChatSession {
 					if (abortCtrl.signal.aborted) {
 						this.lastRetrieval = [];
 						if (!firstTokenReceived) {
-							this.claudeCodeSessionId = null;
+							this.clearBackendSessionIds();
 						}
 					}
 					this.plugin.persistSession(this);
@@ -266,9 +353,9 @@ export class ChatSession {
 					//       instead of `--resume`-ing a half-state one.
 					if (!userMsgCommitted) {
 						rollbackUserMsg();
-						this.claudeCodeSessionId = null;
+						this.clearBackendSessionIds();
 					} else if (!firstTokenReceived) {
-						this.claudeCodeSessionId = null;
+						this.clearBackendSessionIds();
 					}
 					this.lastRetrieval = [];
 					this.plugin.persistSession(this);
@@ -285,7 +372,7 @@ export class ChatSession {
 				this.lastRetrieval = [];
 				this.updatedAt = Date.now();
 				if (!firstTokenReceived) {
-					this.claudeCodeSessionId = null;
+					this.clearBackendSessionIds();
 				}
 				this.plugin.persistSession(this);
 				ctx.onComplete();
@@ -297,9 +384,9 @@ export class ChatSession {
 			// through the provider's onError.
 			if (!userMsgCommitted) {
 				rollbackUserMsg();
-				this.claudeCodeSessionId = null;
+				this.clearBackendSessionIds();
 			} else if (!firstTokenReceived) {
-				this.claudeCodeSessionId = null;
+				this.clearBackendSessionIds();
 			}
 			this.lastRetrieval = [];
 			const err = e instanceof Error ? e : new Error(String(e));
@@ -327,6 +414,10 @@ export class ChatSession {
 			updatedAt: this.updatedAt,
 			boundFilePath: this.boundFile?.path ?? null,
 			claudeCodeSessionId: this.claudeCodeSessionId,
+			codexThreadId: this.codexThreadId,
+			modelOverride: this.modelOverride,
+			effortOverride: this.effortOverride,
+			overrideProvider: this.overrideProvider,
 			history: this.history.map((m) => ({ ...m })),
 		};
 	}

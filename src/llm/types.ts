@@ -31,6 +31,12 @@ export interface StreamCompletionMeta {
 	 */
 	sessionId?: string;
 	/**
+	 * Codex thread id, captured from the `thread.started` JSONL event.
+	 * The session passes it back as `codex exec resume <id>` on the next
+	 * call. Undefined for every other provider.
+	 */
+	codexThreadId?: string;
+	/**
 	 * Claude Code reports a per-request cost via the `result` event.
 	 * Surfaced here so the session/view can display it if desired.
 	 * Undefined for providers that do not report cost.
@@ -64,7 +70,18 @@ export interface StreamChatOpts {
 	 * `onComplete`, or not at all.
 	 */
 	onMeta?: (meta: StreamCompletionMeta) => void;
+	/**
+	 * Effective model id for this call (the chat's `/model` override
+	 * already folded in by the session). Empty/undefined lets the backend
+	 * pick its own default.
+	 */
 	model?: string;
+	/**
+	 * Effective reasoning effort for this call (`/effort` override folded
+	 * in). Claude Code maps it to `--effort`, Codex to
+	 * `model_reasoning_effort`; LM Studio ignores it.
+	 */
+	effort?: string;
 	temperature?: number;
 	/**
 	 * Provider-specific pass-through. Today's only consumer is the
@@ -104,4 +121,10 @@ export interface LLMClient {
 	listModels(): Promise<string[]>;
 	streamChat(opts: StreamChatOpts): Promise<void>;
 	probe(): Promise<ProbeResult>;
+	/**
+	 * Subprocess-backed providers implement this so the plugin can tear
+	 * down live child processes on unload or on a provider switch.
+	 * HTTP-backed providers have nothing to kill and leave it undefined.
+	 */
+	killAll?(): void;
 }

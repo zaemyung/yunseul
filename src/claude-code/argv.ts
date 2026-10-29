@@ -10,6 +10,8 @@ export interface ArgvInputs {
 	sysPromptPath: string;
 	priorSessionId: string | null;
 	modelOverride: string | null;
+	/** Validated effort level (`--effort <level>`), or null for the CLI default. */
+	effort: string | null;
 	enableWrites: boolean;
 }
 
@@ -46,6 +48,11 @@ export function assembleArgs(inputs: ArgvInputs): string[] {
 	}
 	if (inputs.modelOverride !== null) {
 		args.push('--model', inputs.modelOverride);
+	}
+	// `--effort <level>` is per process, which is exactly the lifetime of
+	// one Yunseul message — so the session re-sends it every turn.
+	if (inputs.effort !== null) {
+		args.push('--effort', inputs.effort);
 	}
 	return args;
 }
