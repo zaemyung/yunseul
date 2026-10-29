@@ -113,7 +113,7 @@ The chat layer only ever sees `LLMClient` from `src/llm/types.ts` — a narrow t
 
 - `ChatHeader.ts` — wordmark, status strip, Copy all / Download / New chat buttons.
 - `ChatComposer.ts` — textarea, send/stop morph button, slash hint, bound-file pill.
-- `EmptyState.ts` — tagline + quick-start chips.
+- `EmptyState.ts` — logo, tagline, bound-note indicator, and composer hint.
 - `SourcesBlock.ts` — "Top retrieved sources" collapsible with stable keying.
 - `ChatExporter.ts` — `sessionToMarkdown`, copy-all, download-conversation.
 - `SendController.ts` — per-send streaming pipeline (user + assistant bubbles, throttled `updateContent`, onComplete / onError fan-out).

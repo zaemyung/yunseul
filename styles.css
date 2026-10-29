@@ -1,15 +1,13 @@
 /*
  * Yunseul styles. Operator's Console — bubble-less typographic design.
  * Uses Obsidian CSS variables exclusively where possible so the theme
- * honors the user's color scheme.
+ * honors the user's color scheme and configured fonts.
  *
  * Variable deferral contract: Yunseul honors --interactive-accent.
  * Users wanting a community-theme color (Catppuccin mauve etc.) should
  * set their Obsidian Settings → Appearance → Accent color.
  *
  * Structural invariants:
- *   - The 7ch left mono gutter is load-bearing. Role labels must be
- *     ≤7 chars. Adding a longer role would break the design.
  *   - --yunseul-accent-muted is only valid as a background fill behind
  *     already-contrasting text. Never use as a border in isolation, and
  *     never as a text color.
@@ -21,6 +19,8 @@
 .yunseul-append-modal,
 .yunseul-index-modal,
 .yunseul-reset-modal {
+	/* UI follows Obsidian’s interface font; chat text uses --font-text. */
+	font-family: var(--font-interface);
 	/* Accent defers to Obsidian's --interactive-accent. The hex fallback
 	 * (#2C7AAB) is darker than the original brand #3b8dbf so it passes
 	 * WCAG AA 4.5:1 against --background-primary in the fallback case. */
@@ -245,7 +245,7 @@
 }
 
 .yunseul-wordmark {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 12px;
 	font-weight: 500;
 	letter-spacing: var(--yunseul-wordmark-tracking);
@@ -264,7 +264,7 @@
 }
 
 .yunseul-header-btn {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	font-weight: 500;
 	letter-spacing: var(--yunseul-role-tracking);
@@ -298,7 +298,7 @@
 	border-color: var(--text-error);
 }
 
-/* Status strip — machine-console readout. Promoted from --text-faint
+/* Status strip. Promoted from --text-faint
  * to --text-muted (with weight 500) so it meets AA on Minimal/AnuPpuccin. */
 .yunseul-status-strip {
 	display: flex;
@@ -306,7 +306,7 @@
 	gap: 6px;
 	min-height: 32px;
 	padding: 4px 12px 10px 12px;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	font-weight: 500;
 	color: var(--text-muted);
@@ -393,12 +393,12 @@
 	}
 }
 
-/* Gutter row: 7ch mono role label + em-dash filler + timestamp. */
+/* Gutter row: role label + em-dash filler + timestamp. */
 .yunseul-msg-gutter {
 	display: flex;
 	align-items: baseline;
 	gap: 4px;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	font-weight: 500;
 	letter-spacing: var(--yunseul-role-tracking);
@@ -409,7 +409,7 @@
 .yunseul-msg-role {
 	/* `var() + unit` is invalid CSS — concatenating a `ch` suffix after
 	 * the var() expression makes the parser discard the declaration and
-	 * collapses the 7ch mono gutter. Apply the unit via calc() so the
+	 * collapses the role-label gutter. Apply the unit via calc() so the
 	 * declaration stays valid. */
 	min-width: calc(var(--yunseul-gutter-ch, 7) * 1ch);
 	display: inline-block;
@@ -464,6 +464,7 @@
 
 .yunseul-msg-body code,
 .yunseul-msg-body pre {
+	font-family: var(--font-monospace);
 	background: var(--background-secondary);
 }
 
@@ -521,7 +522,7 @@
 }
 
 .yunseul-msg-action {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	font-weight: 500;
 	letter-spacing: var(--yunseul-role-tracking);
@@ -548,7 +549,7 @@
 
 /* Per-bubble token meter. */
 .yunseul-msg-tokens {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 	text-align: right;
@@ -586,14 +587,14 @@
 }
 
 .yunseul-thinking-label {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 	margin-left: 4px;
 }
 
 .yunseul-thinking-elapsed {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 	margin-left: 4px;
@@ -627,7 +628,7 @@
 }
 
 .yunseul-sources-label {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	font-weight: 500;
 	letter-spacing: var(--yunseul-wordmark-tracking);
@@ -728,7 +729,7 @@
 	 * space from the name; leaders are pure leftover-space fillers. */
 	flex: 1 1 0;
 	min-width: 0;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	color: var(--text-faint);
 	overflow: hidden;
 	white-space: nowrap;
@@ -751,7 +752,7 @@
 }
 
 .yunseul-sources-show-all {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	font-weight: 500;
 	letter-spacing: var(--yunseul-role-tracking);
@@ -845,7 +846,7 @@
 	display: flex;
 	align-items: center;
 	gap: 6px;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 	flex: 1 1 auto;
@@ -863,7 +864,7 @@
  * a layout shift between non-typed and typed states. */
 
 .yunseul-slash-badge {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 	background: var(--background-modifier-form-field);
@@ -876,13 +877,13 @@
 	align-items: center;
 	gap: 12px;
 	margin-left: auto;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 }
 
 .yunseul-send-btn {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	font-weight: 500;
 	letter-spacing: var(--yunseul-role-tracking);
@@ -943,7 +944,7 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 	padding: 10px 10px;
@@ -983,7 +984,7 @@
 	color: var(--text-faint);
 	cursor: pointer;
 	padding: 4px 8px;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 13px;
 	line-height: 1;
 	border-radius: 3px;
@@ -1001,7 +1002,7 @@
 
 .yunseul-context-tokens {
 	margin-left: auto;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 }
@@ -1034,7 +1035,7 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 	padding: 2px 8px;
@@ -1044,7 +1045,7 @@
 }
 
 .yunseul-empty-tagline {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 13px;
 	font-weight: 500;
 	letter-spacing: var(--yunseul-wordmark-tracking);
@@ -1055,7 +1056,7 @@
 }
 
 .yunseul-empty-subtagline {
-	font-family: var(--font-text);
+	font-family: var(--font-interface);
 	font-size: 13px;
 	font-weight: 500;
 	color: var(--text-muted);
@@ -1065,58 +1066,8 @@
 	line-height: 1.5;
 }
 
-.yunseul-empty-suggestions {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	width: 100%;
-	max-width: 360px;
-}
-
-.yunseul-empty-suggestion {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	height: 28px;
-	width: 100%;
-	padding: 0 8px;
-	background: transparent;
-	border: none;
-	border-left: 2px solid transparent;
-	cursor: pointer;
-	text-align: left;
-	color: var(--text-normal);
-}
-
-.yunseul-empty-suggestion:hover {
-	background: var(--background-modifier-hover);
-	border-left-color: var(--yunseul-accent);
-}
-
-.yunseul-empty-suggestion:hover .yunseul-empty-text {
-	text-decoration: underline;
-}
-
-.yunseul-empty-suggestion:focus-visible {
-	outline: 2px solid var(--yunseul-accent);
-	outline-offset: 2px;
-}
-
-.yunseul-empty-num {
-	font-family: var(--font-monospace);
-	font-size: 11px;
-	letter-spacing: var(--yunseul-role-tracking);
-	color: var(--text-faint);
-}
-
-.yunseul-empty-text {
-	font-family: var(--font-text);
-	font-size: 14px;
-	color: var(--text-normal);
-}
-
 .yunseul-empty-hint {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	color: var(--text-muted);
 	text-align: center;
@@ -1133,7 +1084,7 @@
 }
 
 .yunseul-empty-version {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 10px;
 	color: var(--text-faint);
 	letter-spacing: var(--yunseul-wordmark-tracking);
@@ -1246,7 +1197,7 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 11px;
 	font-weight: 500;
 	letter-spacing: var(--yunseul-wordmark-tracking);
@@ -1271,7 +1222,7 @@
 }
 
 .yunseul-settings-summary-col-label {
-	font-family: var(--font-monospace);
+	font-family: var(--font-interface);
 	font-size: 10px;
 	letter-spacing: var(--yunseul-role-tracking);
 	text-transform: uppercase;

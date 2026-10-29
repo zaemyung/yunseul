@@ -1,8 +1,8 @@
 import type { Component } from 'obsidian';
 import type { ChatSession } from '../chat/session';
 
-// First-load chrome (tagline + sub-tagline + bound-file pill + quick-
-// start chips + slash/hash/date hint + version footer) when transcript
+// First-load chrome (tagline + sub-tagline + bound-file pill +
+// composer hint + version footer) when transcript
 // is empty. Owns its rendered subtree only; teardown is element removal.
 //
 // The aria-describedby wiring on the orchestrator-owned textarea is
@@ -13,7 +13,6 @@ export interface EmptyStateOptions {
 	container: HTMLElement;
 	component: Component;
 	session: ChatSession;
-	suggestions: ReadonlyArray<string>;
 	pluginVersion: string;
 	slashHintId: string;
 	/**
@@ -23,7 +22,6 @@ export interface EmptyStateOptions {
 	 * the adapter can omit it.
 	 */
 	logoUrl?: string | null;
-	onSuggestionPick: (text: string) => void;
 	/**
 	 * Invoked when the user clicks the `×` next to the bound-file
 	 * indicator in the empty state. The orchestrator MUST execute all
@@ -89,25 +87,6 @@ export function renderEmptyState(opts: EmptyStateOptions): EmptyStateHandle {
 		cls: 'yunseul-empty-subtagline',
 		text: 'Chat with the current note, or pull context from anywhere in your vault.',
 	});
-
-	const list = empty.createDiv({ cls: 'yunseul-empty-suggestions' });
-	for (let i = 0; i < opts.suggestions.length; i++) {
-		const text = opts.suggestions[i];
-		if (text === undefined) continue;
-		const btn = list.createEl('button', {
-			cls: 'yunseul-empty-suggestion',
-			attr: { 'aria-label': text },
-		});
-		btn.createSpan({
-			cls: 'yunseul-empty-num',
-			text: String(i + 1).padStart(2, '0'),
-			attr: { 'aria-hidden': 'true' },
-		});
-		btn.createSpan({ cls: 'yunseul-empty-text', text });
-		opts.component.registerDomEvent(btn, 'click', () => {
-			opts.onSuggestionPick(text);
-		});
-	}
 
 	// The hint paragraph is retained as the aria-describedby target
 	// (orchestrator sets `aria-describedby={slashHintId}` on the

@@ -63,7 +63,7 @@ export interface YunseulSettings {
 		enableWrites: boolean;
 	};
 	chat: {
-		// Quick-suggestion prompts shown in the empty state's numbered list.
+		// Legacy quick prompts, retained for stored-settings compatibility.
 		suggestions: string[];
 		downloadFolder: string;
 	};

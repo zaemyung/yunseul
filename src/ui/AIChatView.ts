@@ -270,7 +270,6 @@ export class AIChatView extends ItemView {
 			container: this.transcriptEl,
 			component: this,
 			session,
-			suggestions: this.plugin.settings.chat.suggestions,
 			pluginVersion: this.plugin.manifest.version,
 			slashHintId: this.slashHintId,
 			// The brand mark is embedded as a data URI (see logoAsset.ts).
@@ -278,7 +277,6 @@ export class AIChatView extends ItemView {
 			// repo's assets/logo.png is absent in a real install; inlining
 			// keeps the hero figure self-contained across install methods.
 			logoUrl: YUNSEUL_LOGO_DATA_URI,
-			onSuggestionPick: (text) => this.applySuggestion(text),
 			onUnbindBoundFile: () => {
 				// CONTRACT (EmptyState.ts): all four side effects in order.
 				session.boundFile = null;
@@ -291,16 +289,6 @@ export class AIChatView extends ItemView {
 		// wiring, set immediately after renderEmptyState and removed at
 		// renderHistoryFor / send so the attr never dangles.
 		this.composerHandle?.setSlashHintDescribedBy(true);
-	}
-
-	private applySuggestion(text: string): void {
-		const c = this.composerHandle;
-		if (c === null) return;
-		c.setValue(text);
-		c.focus();
-		c.resize();
-		c.frameEl.toggleClass('is-typing', c.getValue().length > 0);
-		c.updateContextRow();
 	}
 
 	private async handleSendOrStop(): Promise<void> {
@@ -470,7 +458,7 @@ export class AIChatView extends ItemView {
 		}
 		await this.plugin.deleteSession(current.id);
 		// Land on the main page: a fresh empty session renders the empty-
-		// state hero (logo + tagline + suggestions).
+		// state hero (logo + tagline + composer hint).
 		this.mountFreshSession();
 		new Notice('Chat deleted.');
 	}
