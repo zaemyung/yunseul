@@ -39,7 +39,7 @@ export class AppendPreviewModal extends Modal {
 		targetWrap.createSpan({ text: 'Target: ' });
 		targetWrap.createEl('code', { text: this.opts.file.path });
 
-		const previewLabel = contentEl.createEl('div', {
+		const previewLabel = contentEl.createDiv({
 			cls: 'yunseul-append-label',
 			text: 'Preview',
 		});

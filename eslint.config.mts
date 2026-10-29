@@ -1,9 +1,8 @@
-import tseslint from 'typescript-eslint';
 import obsidianmd from 'eslint-plugin-obsidianmd';
 import globals from 'globals';
-import { globalIgnores } from 'eslint/config';
+import { defineConfig, globalIgnores } from 'eslint/config';
 
-export default tseslint.config(
+export default defineConfig(
 	globalIgnores([
 		'node_modules',
 		'dist',
@@ -55,10 +54,12 @@ export default tseslint.config(
 		//      (CORS-bypassing) to distinguish CORS-blocked from offline.
 		// Switching to requestUrl in either path would silently break
 		// streaming or hide a misconfiguration error users need to fix.
-		// Scoped override so per-line eslint-disable comments are not
-		// required; the obsidianmd preset's `no-restricted-globals` rule
-		// (which forbids `fetch`) is reset here without affecting any
-		// other restricted globals (`app`, `localStorage`).
+		// Scoped override: the obsidianmd preset's `no-restricted-globals`
+		// rule (which forbids `fetch`) is reset here without affecting the
+		// other restricted globals (`app`, `localStorage`). An inline
+		// eslint-disable is not an option — the preset forbids disabling
+		// that rule inline — so the community review, which lints with the
+		// preset alone, keeps reporting these two calls as warnings.
 		files: ['src/lmstudio/client.ts'],
 		rules: {
 			'no-restricted-globals': ['error',
@@ -74,6 +75,16 @@ export default tseslint.config(
 		},
 	},
 	{
+		// util/node.ts narrows the Node built-ins with `as` views so the
+		// community review's lint (typed rules, no @types/node) sees typed
+		// values. With @types/node present the assertions are redundant by
+		// construction; tsc still checks each one for comparability.
+		files: ['src/util/node.ts'],
+		rules: {
+			'@typescript-eslint/no-unnecessary-type-assertion': 'off',
+		},
+	},
+	{
 		// settings.ts still calls the deprecated PluginSettingTab#display()
 		// as a re-render seam. The replacement getSettingDefinitions API
 		// (added in 1.13.0) would require a wholesale rewrite from the
@@ -83,6 +94,7 @@ export default tseslint.config(
 		files: ['src/settings.ts'],
 		rules: {
 			'@typescript-eslint/no-deprecated': 'off',
+			'obsidianmd/settings-tab/prefer-setting-definitions': 'off',
 		},
 	},
 );

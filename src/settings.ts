@@ -963,7 +963,7 @@ export class YunseulSettingTab extends PluginSettingTab {
 		this.renderCliProbe(containerEl, 'codex');
 
 		const help = containerEl.createDiv({ cls: 'yunseul-help' });
-		help.createEl('span', { text: 'Yunseul uses your existing Codex login (`codex login`). Prompts and vault excerpts are sent to OpenAI through the CLI.' });
+		help.createSpan({ text: 'Yunseul uses your existing Codex login (`codex login`). Prompts and vault excerpts are sent to OpenAI through the CLI.' });
 	}
 
 	/**
@@ -1104,13 +1104,13 @@ export class YunseulSettingTab extends PluginSettingTab {
 		this.renderCliProbe(containerEl, 'claude');
 
 		const help = containerEl.createDiv({ cls: 'yunseul-help' });
-		help.createEl('span', { text: 'Yunseul uses your existing Claude Code login. See ' });
+		help.createSpan({ text: 'Yunseul uses your existing Claude Code login. See ' });
 		help.createEl('a', {
 			text: 'authentication docs',
 			href: 'https://code.claude.com/docs/en/authentication',
 			attr: { target: '_blank', rel: 'noopener noreferrer' },
 		});
-		help.createEl('span', { text: '.' });
+		help.createSpan({ text: '.' });
 	}
 
 	private buildApiKeySetting(containerEl: HTMLElement): void {

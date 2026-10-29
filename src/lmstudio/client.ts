@@ -181,7 +181,8 @@ export class LMClient implements LLMClient {
 			// probeDetailed() uses requestUrl as fallback so CORS issues
 			// are still detected. The obsidianmd preset's
 			// `no-restricted-globals` ban on `fetch` is reset for this
-			// file via the eslint config override.
+			// file via the eslint config override (the preset also forbids
+			// inline disables of that rule).
 			res = await fetch(url, {
 				method: 'POST',
 				headers: {
