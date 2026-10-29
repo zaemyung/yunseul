@@ -9,9 +9,9 @@
   <a href="https://buymeacoffee.com/zaemyung"><img src="https://img.shields.io/badge/buy_me_a-coffee-FFDD00?logo=buymeacoffee&logoColor=000" alt="Buy me a coffee" /></a>
 </p>
 
-# Yunseul (윤슬)
+# Yunseul
 
-> *Yunseul (윤슬)* — Korean for *sparkling ripples on the water*. Where your notes catch the light: brilliant insights amidst a chaotic web of notes.
+> *Yunseul* — sparkling ripples on the water. Where your notes catch the light: brilliant insights amidst a chaotic web of notes.
 
 Chat with your Obsidian vault using a local OpenAI-compatible LLM server (LM Studio, Ollama, llama.cpp server, vLLM, LocalAI) or the Claude Code CLI.
 

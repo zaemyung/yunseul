@@ -76,7 +76,7 @@ export default class YunseulPlugin extends Plugin {
 
 		// The ribbon "Open chat" action uses the same `sparkles` mark as the
 		// chat view's tab icon (AIChatView.getIcon) so the sidebar entry and
-		// the open view read as one feature — 윤슬 = sunlight sparkling on water.
+		// the open view read as one feature — Yunseul means sunlight sparkling on water.
 		this.addRibbonIcon('sparkles', 'Open chat', () => {
 			void this.activateView();
 		});
