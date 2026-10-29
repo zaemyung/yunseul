@@ -3,9 +3,8 @@
 // env (env.ts + OPENAI_/CODEX_), cwd = vault root, and a read-only sandbox
 // unless the user enables writes. Auth stays inside the user's Codex
 // install (`codex login`); Yunseul never sees a key.
-import { spawn } from 'child_process';
-import { promises as fsp } from 'fs';
 import type YunseulPlugin from '../main';
+import { nodeProcess, readTextFile, spawn } from '../util/node';
 import type { LLMClient, ProbeResult, StreamChatOpts } from '../llm/types';
 import type { ModelCatalog } from '../llm/catalog';
 import { redactSecrets } from '../util/redact';
@@ -24,9 +23,7 @@ import { readCodexCatalog, type CatalogFiles } from './catalog';
 // The user prompt goes on stdin; stdout is JSONL (events.ts).
 
 const DEFAULT_IO: SubprocessIO = { spawn };
-const DEFAULT_FILES: CatalogFiles = {
-	readFile: (path) => fsp.readFile(path, { encoding: 'utf8' }),
-};
+const DEFAULT_FILES: CatalogFiles = { readFile: readTextFile };
 
 export class CodexClient implements LLMClient {
 	private readonly plugin: YunseulPlugin;
@@ -51,10 +48,10 @@ export class CodexClient implements LLMClient {
 		// Read from the Codex CLI's own local files (see catalog.ts):
 		// $CODEX_HOME/models_cache.json for the account's models and
 		// per-model effort levels, config.toml for the default model.
-		const env = process.env;
+		const env = nodeProcess.env;
 		return readCodexCatalog(
 			this.files,
-			{ CODEX_HOME: env.CODEX_HOME, HOME: env.HOME, USERPROFILE: env.USERPROFILE, platform: process.platform },
+			{ CODEX_HOME: env.CODEX_HOME, HOME: env.HOME, USERPROFILE: env.USERPROFILE, platform: nodeProcess.platform },
 			(msg) => this.plugin.logger.warn(msg),
 		);
 	}
@@ -99,7 +96,7 @@ export class CodexClient implements LLMClient {
 			{
 				io: this.io,
 				env: buildSafeEnv(CODEX_ENV_PREFIXES),
-				cwd: process.cwd(),
+				cwd: nodeProcess.cwd(),
 				registerLive: (entry) => this.liveProcs.add(entry),
 				unregisterLive: (entry) => {
 					this.liveProcs.delete(entry);

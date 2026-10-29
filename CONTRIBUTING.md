@@ -25,7 +25,7 @@ yunseul/
     codex/               # Codex CLI subprocess client (argv, events, toml, streamChat, catalog) built on that plumbing
     index/               # BM25 inverted index + retriever
     ui/                  # AIChatView orchestrator + extracted modules
-    util/                # shared helpers (guards, paths, log, throttle, redact, lineBuffer)
+    util/                # shared helpers (guards, paths, log, throttle, redact, lineBuffer, node = typed views of the Node built-ins)
   tests/                 # vitest suites with the obsidian module stubbed under tests/_stubs/
 ```
 
@@ -93,6 +93,7 @@ PRs must keep all three of `npm run build`, `npm test`, and `npm run lint` green
 Yunseul enforces a strict set of conventions, most of them via `eslint.config.mts` plus `eslint-plugin-obsidianmd`. The short version:
 
 - **No `any`** — use `unknown` plus a narrowing validator. See `src/util/guards.ts` for the `isObject` pattern.
+- **Node built-ins only through `src/util/node.ts`** — the community review lints without `/node`, so a direct `fs`/`child_process`/`process` use is `any` there and trips the no-unsafe-* rules. The module exposes the few helpers we need behind explicit signatures that tsc still checks against the real typings.
 - **No `var`** — `const` by default, `let` only when reassignment is necessary.
 - **No `innerHTML` and no `addEventListener`** — use `createEl()`/`createDiv()`/`setText()` for plugin-controlled DOM, and `MarkdownRenderer.render(...)` for rendered markdown. All event listeners go through `this.registerEvent()`, `this.registerDomEvent()`, or `this.registerInterval()` so they are torn down when the plugin unloads.
 - **All icons via `setIcon()`** — never inline SVG strings.

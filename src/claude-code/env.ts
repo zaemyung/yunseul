@@ -11,19 +11,9 @@
 // tests/claude-code.test.ts 'env hardening (regression)' describe).
 
 import type { EnvMap } from './io';
-
-/**
- * Narrow, explicitly-typed view of the global `process`. We declare the
- * two members we consume (env, platform) instead of leaning on
- * NodeJS.Process so this module — and everything downstream of
- * buildSafeEnv() — stays fully typed even in lint environments without
- * @types/node (the community plugin review lints without it).
- */
-interface ProcessView {
-	env: EnvMap;
-	platform: string;
-}
-const nodeProcess = process as ProcessView;
+// Narrow, explicitly-typed view of the global `process` (env, platform),
+// shared with the other Node touch points; see util/node.ts for why.
+import { nodeProcess } from '../util/node';
 
 // Minimal env allowlist for the subprocess.
 export const SAFE_ENV_VARS: ReadonlySet<string> = new Set([

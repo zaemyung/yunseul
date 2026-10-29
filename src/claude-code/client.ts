@@ -5,7 +5,7 @@
 // settings, with default resolution via PATH) and a fixed argv array.
 // env is hardened by buildSafeEnv() (see env.ts). The subprocess's tool
 // permissions are controlled by --allowedTools.
-import { spawn } from 'child_process';
+import { mkdirp, nodeProcess, spawn, unlink, writeFileExclusive } from '../util/node';
 // Justification (community review): the Claude Code provider writes a
 // temporary system prompt file under runtimeDir (vault-relative,
 // plugin-owned) so the CLI can consume it via
@@ -14,7 +14,6 @@ import { spawn } from 'child_process';
 // path the spawned subprocess can read directly, so node fs is required.
 // All writes are scoped to runtimeDir(plugin) which lives under the
 // plugin folder and is cleaned up on uninstall.
-import { promises as fsp } from 'fs';
 import type YunseulPlugin from '../main';
 import { redactSecrets } from '../util/redact';
 import { vaultBasePath } from '../util/paths';
@@ -73,16 +72,14 @@ import { streamChat } from './streamChat';
 // callers — including tests/claude-code.test.ts — can keep importing
 // from the client path.
 
+// Node built-ins come through util/node.ts (typed views). writeFile is
+// the exclusive-create variant: it refuses to overwrite an existing file,
+// the defence against a vault sync dropping a stale symlink at the path.
 const DEFAULT_IO: ClaudeCodeIO = {
 	spawn,
-	// `wx` flag refuses to overwrite an existing file — defense against
-	// symlink-replace attacks where a vault-sync (Obsidian Sync, git,
-	// Syncthing) drops a stale symlink at the target path.
-	writeFile: (p, d) => fsp.writeFile(p, d, { encoding: 'utf8', flag: 'wx' }),
-	unlink: (p) => fsp.unlink(p),
-	mkdir: async (p, o) => {
-		await fsp.mkdir(p, o);
-	},
+	writeFile: writeFileExclusive,
+	unlink,
+	mkdir: mkdirp,
 };
 
 // Re-exports for back-compat with tests/claude-code.test.ts:7-10 which
@@ -185,7 +182,7 @@ export class ClaudeCodeClient implements LLMClient {
 			{
 				io: this.io,
 				env: buildSafeEnv(CLAUDE_ENV_PREFIXES),
-				cwd: process.cwd(),
+				cwd: nodeProcess.cwd(),
 				registerLive: (entry) => this.liveProcs.add(entry),
 				unregisterLive: (entry) => {
 					this.liveProcs.delete(entry);

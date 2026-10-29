@@ -18,16 +18,8 @@
 // fallback location for the temp system-prompt file when runtimeDir
 // (vault-relative, plugin-owned) is unavailable. No identifying data is
 // read from `os`; the path is handed to a locally-spawned subprocess.
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { makeNonce } from '../util/guards';
-
-// Typed pins for the two node helpers this module consumes. The explicit
-// annotations keep every downstream path expression fully typed even in
-// lint environments without @types/node (the community plugin review
-// lints without it).
-const joinPath: (...parts: string[]) => string = join;
-const osTmpdir: () => string = tmpdir;
+import { joinPath, osTmpdir } from '../util/node';
 
 /**
  * Subset of ClaudeCodeIO needed by the sysprompt writer. We accept a
