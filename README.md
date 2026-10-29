@@ -82,7 +82,7 @@ Codex's own interactive slash commands do not exist in its non-interactive mode,
 
 ## Installation
 
-### Community plugin store (recommended, when published)
+### Community plugin store (recommended)
 
 1. Open **Settings → Community plugins** in Obsidian.
 2. Turn **Restricted mode** off.
