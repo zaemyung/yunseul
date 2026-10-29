@@ -1,16 +1,17 @@
 import { type Component } from 'obsidian';
 import type { ChatSession } from '../chat/session';
 import type YunseulPlugin from '../main';
-import { renderSlashMenu } from './SlashMenu';
+import { renderSlashMenu, type SlashMenuItem } from './SlashMenu';
 import { availableSlashCommands } from '../claude-code/slash';
 
 // Textarea + send/stop button + slash hint + Cmd-Enter hint + context
-// pill + token meter + slash-command popover (SlashMenu.ts, Claude Code
-// provider only). Owns its own DOM, the auto-grow resize, and
-// typing/has-bound classes. Does NOT toggle the connection-dot's
-// is-streaming class — the orchestrator's setStreamingUI helper routes
-// that through ChatHeader.setStreamingPulse so composer and header
-// cannot drift.
+// pill + token meter + slash-command popover (SlashMenu.ts: command
+// completion for every provider, plus the /model and /effort option
+// pickers whose rows the orchestrator supplies). Owns its own DOM, the
+// auto-grow resize, and typing/has-bound classes. Does NOT toggle the
+// connection-dot's is-streaming class — the orchestrator's
+// setStreamingUI helper routes that through ChatHeader.setStreamingPulse
+// so composer and header cannot drift.
 
 export interface ChatComposerOptions {
 	root: HTMLElement;
@@ -22,6 +23,14 @@ export interface ChatComposerOptions {
 	onBindFile: () => void;
 	onUnbindFile: () => void;
 	onPreviousFocus: () => void;
+	/** Rows for `/command <arg>` pickers; null when the command has none. */
+	getArgumentItems: (command: string) => readonly SlashMenuItem[] | null;
+	/** Status row for those pickers (loading / failed); null = none. */
+	getArgumentStatus: (command: string) => string | null;
+	/** A picker row was chosen: run `/command value`. */
+	onPickArgument: (command: string, value: string) => void;
+	/** A picker opened for `command`: start any fetch its rows need. */
+	onArgumentMenuOpen: (command: string) => void;
 }
 
 export interface ChatComposerHandle {
@@ -33,6 +42,10 @@ export interface ChatComposerHandle {
 	setSlashHintDescribedBy(on: boolean): void;
 	/** Re-read the provider: hint wording + popover availability. */
 	updateSlashHint(): void;
+	/** Fill `/command ` and open its option picker (bare `/model` + Enter). */
+	openArgumentPicker(command: string): void;
+	/** Re-evaluate the popover against the textarea (a fetch finished). */
+	refreshSlashMenu(): void;
 	focus(): void;
 	getValue(): string;
 	setValue(v: string): void;
@@ -60,6 +73,19 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 	// styles.css) so it can open upward over the transcript. Reads the
 	// provider + cached command list live, so a provider switch or a
 	// freshly learned list takes effect on the next keystroke.
+	//
+	// Filling `/name ` re-syncs the popover: for /model and /effort the
+	// trailing space is exactly what flips it into the option picker, so
+	// completing the command and opening its picker is one motion.
+	const fillCommand = (name: string): void => {
+		inputEl.value = `/${name} `;
+		const end = inputEl.value.length;
+		inputEl.setSelectionRange(end, end);
+		frameEl.toggleClass('is-typing', true);
+		updateContextRow();
+		inputEl.focus();
+		slashMenu.sync();
+	};
 	const slashMenu = renderSlashMenu({
 		anchorEl: frameEl,
 		inputEl,
@@ -72,14 +98,11 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 			opts.plugin.settings.provider,
 			opts.plugin.settings.claudeCode.knownSlashCommands,
 		),
-		onPick: (name) => {
-			inputEl.value = `/${name} `;
-			const end = inputEl.value.length;
-			inputEl.setSelectionRange(end, end);
-			frameEl.toggleClass('is-typing', true);
-			updateContextRow();
-			inputEl.focus();
-		},
+		onPick: fillCommand,
+		getArgumentItems: opts.getArgumentItems,
+		getArgumentStatus: opts.getArgumentStatus,
+		onPickArgument: opts.onPickArgument,
+		onArgumentMenuOpen: opts.onArgumentMenuOpen,
 	});
 
 	// The popover gets first pick of every keystroke while open: arrows
@@ -258,9 +281,16 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 
 	const updateSlashHint = (): void => {
 		slashHintText.setText(slashHintLabel(opts.plugin));
-		// Provider switched while the popover was open (settings tab and
-		// chat side by side): re-evaluate so it closes or reopens.
-		slashMenu.sync();
+		// Settings changed while the popover was open (settings tab and
+		// chat side by side): start it over so the command list re-reads
+		// the provider and an argument picker re-enters, which lets the
+		// owner refetch rows that the change may have invalidated. A
+		// popover the user dismissed stays dismissed; the next keystroke
+		// re-opens it against the new settings.
+		if (slashMenu.isOpen()) {
+			slashMenu.close();
+			slashMenu.sync();
+		}
 	};
 
 	updateContextRow();
@@ -273,6 +303,13 @@ export function renderChatComposer(opts: ChatComposerOptions): ChatComposerHandl
 		setSendButtonStreaming,
 		setSlashHintDescribedBy,
 		updateSlashHint,
+		openArgumentPicker: fillCommand,
+		// Only an open popover is refreshed: a fetch landing after the
+		// user dismissed the picker must not pop it back up and hijack
+		// the next Enter. The next keystroke re-opens it as usual.
+		refreshSlashMenu: () => {
+			if (slashMenu.isOpen()) slashMenu.sync();
+		},
 		focus: () => inputEl.focus(),
 		getValue: () => inputEl.value,
 		setValue: (v: string) => {

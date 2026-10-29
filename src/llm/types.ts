@@ -14,6 +14,8 @@
 // upward and it is intentionally bag-of-optionals — fields are
 // populated only by providers that have a value for them.
 
+import type { ModelCatalog } from './catalog';
+
 export type ChatRole = 'system' | 'user' | 'assistant';
 
 export interface ChatRequestMessage {
@@ -119,6 +121,13 @@ export interface LLMClient {
 	 * subscription rather than enumerated locally.
 	 */
 	listModels(): Promise<string[]>;
+	/**
+	 * Richer form of listModels for the `/model` and `/effort` pickers:
+	 * ids plus whatever descriptions, per-model effort levels, and
+	 * backend default the provider can learn locally. Providers that
+	 * only know ids leave it undefined and the view wraps listModels().
+	 */
+	listModelCatalog?(): Promise<ModelCatalog>;
 	streamChat(opts: StreamChatOpts): Promise<void>;
 	probe(): Promise<ProbeResult>;
 	/**

@@ -1,21 +1,38 @@
 import { type Component } from 'obsidian';
 import { filterSlashCommands } from '../claude-code/slash';
 
-// Slash-command popover for the composer.
+// Slash-command popover for the composer. Two modes, one listbox:
 //
-// Opens while the textarea holds nothing but `/` plus a partial command
-// name, lists the commands the owner supplies (Yunseul's own /clear,
-// /model, /effort for every provider, plus the Claude Code CLI's
-// advertised list when that provider is active), and fills the textarea
-// with `/name ` on pick. It is a listbox driven from the textarea (ARIA
-// "textbox with aria-activedescendant" pattern): the textarea keeps
-// focus, options are not focusable, and the active option is mirrored
-// into aria-activedescendant. Mouse selection goes through
+//  - Command mode: the textarea holds nothing but `/` plus a partial
+//    command name. Lists the commands the owner supplies (Yunseul's own
+//    /clear, /model, /effort for every provider, plus the Claude Code
+//    CLI's advertised list when that provider is active) and fills the
+//    textarea with `/name ` on pick.
+//  - Argument mode: the textarea holds `/name ` plus a partial argument
+//    and the owner has options for that command (`/model`, `/effort`).
+//    Lists those options — with descriptions and a "current" marker —
+//    filtered by the partial; picking one runs the command at once, the
+//    way the CLIs' own pickers do. An optional status row carries
+//    "Loading models…" or a failure reason while the owner fetches.
+//
+// It is a listbox driven from the textarea (ARIA "textbox with
+// aria-activedescendant" pattern): the textarea keeps focus, options are
+// not focusable, and the active option is mirrored into
+// aria-activedescendant. Mouse selection goes through
 // mousedown-preventDefault so the textarea never blurs mid-pick.
 //
 // The owner (ChatComposer) routes keystrokes through handleKeydown
 // BEFORE its own Enter-to-send binding, so Enter/Tab accept an option
 // instead of sending while the popover is open.
+
+export interface SlashMenuItem {
+	/** Command name (command mode) or argument value (argument mode). */
+	value: string;
+	/** One-line description shown muted after the value. */
+	detail?: string;
+	/** Argument mode: the value in effect for this chat right now. */
+	current?: boolean;
+}
 
 export interface SlashMenuOptions {
 	/** Positioned container the popover anchors to (the composer frame). */
@@ -25,9 +42,21 @@ export interface SlashMenuOptions {
 	/** Unique per view; used for aria-controls / option ids. */
 	menuId: string;
 	getCommands: () => readonly string[];
-	/** False for providers without slash commands (LM Studio). */
+	/** False for providers without slash commands (none today; kept for the owner). */
 	isEnabled: () => boolean;
+	/** Command mode pick: the owner fills `/name ` into the textarea. */
 	onPick: (name: string) => void;
+	/**
+	 * Options for `/command <arg>`, or null when the command takes no
+	 * picked argument (everything but /model and /effort).
+	 */
+	getArgumentItems: (command: string) => readonly SlashMenuItem[] | null;
+	/** Status row for argument mode (loading, failure, nothing listed); null = none. */
+	getArgumentStatus: (command: string) => string | null;
+	/** Argument mode pick: the owner runs the command with the value. */
+	onPickArgument: (command: string, value: string) => void;
+	/** Fires each time the popover enters argument mode for a command (owner may start a fetch). */
+	onArgumentMenuOpen: (command: string) => void;
 }
 
 export interface SlashMenuHandle {
@@ -40,9 +69,14 @@ export interface SlashMenuHandle {
 	isOpen(): boolean;
 }
 
-// The whole value must be `/` + partial name: a space or newline means
-// the user is past the command and typing arguments.
-const QUERY_RE = /^\/([A-Za-z0-9_:.-]*)$/;
+type Mode = 'commands' | 'argument';
+
+// Command mode: the whole value is `/` + partial name.
+const COMMAND_RE = /^\/([A-Za-z0-9_:.-]*)$/;
+// Argument mode: `/name` + spaces/tabs + partial argument, all on one
+// line. A newline or a second argument means the user is past the
+// picker (the command validator will reject spaces in an id anyway).
+const ARGUMENT_RE = /^\/([A-Za-z0-9_][A-Za-z0-9_:.-]{0,63})[ \t]+(\S*)$/;
 
 // Height budget when opening upward. The CSS max-height is the ceiling;
 // render() lowers it to the room actually available above the frame so a
@@ -52,6 +86,20 @@ const MENU_MAX_HEIGHT_PX = 240;
 const MENU_MIN_HEIGHT_PX = 80;
 const MENU_MARGIN_PX = 12;
 
+/** Prefix matches first, then substring matches, on the value only. */
+export function filterSlashItems(items: readonly SlashMenuItem[], query: string): SlashMenuItem[] {
+	const q = query.toLowerCase();
+	if (q.length === 0) return items.slice();
+	const prefix: SlashMenuItem[] = [];
+	const contains: SlashMenuItem[] = [];
+	for (const item of items) {
+		const lower = item.value.toLowerCase();
+		if (lower.startsWith(q)) prefix.push(item);
+		else if (lower.includes(q)) contains.push(item);
+	}
+	return prefix.concat(contains);
+}
+
 export function renderSlashMenu(opts: SlashMenuOptions): SlashMenuHandle {
 	const listEl = opts.anchorEl.createDiv({
 		cls: 'yunseul-slash-menu',
@@ -59,7 +107,9 @@ export function renderSlashMenu(opts: SlashMenuOptions): SlashMenuHandle {
 	});
 
 	let open = false;
-	let items: string[] = [];
+	let mode: Mode = 'commands';
+	let command = '';
+	let items: SlashMenuItem[] = [];
 	let active = -1;
 	let query = '';
 
@@ -75,12 +125,13 @@ export function renderSlashMenu(opts: SlashMenuOptions): SlashMenuHandle {
 		listEl.setCssStyles({ maxHeight: `${px}px` });
 	};
 
-	const render = (): void => {
+	const render = (status: string | null): void => {
 		listEl.empty();
 		fitHeight();
+		listEl.setAttr('aria-label', mode === 'commands' ? 'Commands' : `Options for /${command}`);
 		for (let i = 0; i < items.length; i++) {
-			const name = items[i];
-			if (name === undefined) continue;
+			const item = items[i];
+			if (item === undefined) continue;
 			const el = listEl.createDiv({
 				cls: 'yunseul-slash-option',
 				attr: {
@@ -90,13 +141,34 @@ export function renderSlashMenu(opts: SlashMenuOptions): SlashMenuHandle {
 					'data-index': String(i),
 				},
 			});
-			el.createSpan({ cls: 'yunseul-slash-option-name', text: `/${name}` });
+			el.createSpan({
+				cls: 'yunseul-slash-option-name',
+				text: mode === 'commands' ? `/${item.value}` : item.value,
+			});
+			if (item.detail !== undefined) {
+				el.createSpan({ cls: 'yunseul-slash-option-detail', text: item.detail });
+			}
+			if (item.current === true) {
+				el.addClass('is-current');
+				el.setAttr('aria-current', 'true');
+				// aria-current already announces it; the badge is visual.
+				el.createSpan({ cls: 'yunseul-slash-option-badge', text: 'current', attr: { 'aria-hidden': 'true' } });
+			}
 			if (i === active) {
 				el.addClass('is-active');
 				// jsdom has no scrollIntoView; real DOM keeps the active
 				// row visible inside the scrollable list.
 				if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
 			}
+		}
+		if (status !== null) {
+			// Announced but never active: not an index in `items`, so the
+			// arrow keys skip it and Enter cannot pick it.
+			listEl.createDiv({
+				cls: 'yunseul-slash-status',
+				text: status,
+				attr: { role: 'option', 'aria-disabled': 'true', 'aria-selected': 'false' },
+			});
 		}
 		listEl.addClass('is-open');
 		opts.inputEl.setAttr('aria-haspopup', 'listbox');
@@ -112,6 +184,8 @@ export function renderSlashMenu(opts: SlashMenuOptions): SlashMenuHandle {
 	const close = (): void => {
 		if (!open && items.length === 0) return;
 		open = false;
+		mode = 'commands';
+		command = '';
 		items = [];
 		active = -1;
 		listEl.empty();
@@ -120,6 +194,60 @@ export function renderSlashMenu(opts: SlashMenuOptions): SlashMenuHandle {
 		opts.inputEl.removeAttribute('aria-autocomplete');
 		opts.inputEl.removeAttribute('aria-controls');
 		opts.inputEl.removeAttribute('aria-activedescendant');
+	};
+
+	const sameItems = (a: readonly SlashMenuItem[], b: readonly SlashMenuItem[]): boolean =>
+		a.length === b.length && a.every((x, i) => x.value === b[i]?.value);
+
+	const syncCommands = (partial: string): void => {
+		const next = filterSlashCommands(opts.getCommands(), partial).map((value) => ({ value }));
+		// Nothing matches: get out of the way so Enter sends the text as
+		// typed (Claude Code forwards unknown commands to the model with a
+		// note; other backends treat it as plain text).
+		if (next.length === 0) {
+			close();
+			return;
+		}
+		const changed = mode !== 'commands' || !sameItems(next, items);
+		mode = 'commands';
+		command = '';
+		query = partial;
+		items = next;
+		if (changed || !open) active = 0;
+		open = true;
+		render(null);
+	};
+
+	const syncArgument = (name: string, partial: string): void => {
+		if (opts.getArgumentItems(name) === null) {
+			close();
+			return;
+		}
+		// Tell the owner first: it may flip its state to "loading" (and
+		// start a fetch) so the rows and status read below already
+		// reflect that on the very first paint.
+		const entering = !(open && mode === 'argument' && command === name);
+		if (entering) opts.onArgumentMenuOpen(name);
+		const next = filterSlashItems(opts.getArgumentItems(name) ?? [], partial);
+		const status = opts.getArgumentStatus(name);
+		if (next.length === 0 && status === null) {
+			close();
+			return;
+		}
+		const changed = entering || !sameItems(next, items);
+		mode = 'argument';
+		command = name;
+		query = partial;
+		items = next;
+		if (changed) {
+			// Land on the row in effect when the list is unfiltered (the
+			// CLIs' pickers do the same); a typed partial puts the best
+			// match first.
+			const currentIdx = partial.length === 0 ? next.findIndex((it) => it.current === true) : -1;
+			active = next.length === 0 ? -1 : (currentIdx >= 0 ? currentIdx : 0);
+		}
+		open = true;
+		render(status);
 	};
 
 	const sync = (): void => {
@@ -136,32 +264,28 @@ export function renderSlashMenu(opts: SlashMenuOptions): SlashMenuHandle {
 			close();
 			return;
 		}
-		const m = QUERY_RE.exec(opts.inputEl.value);
-		if (m === null) {
-			close();
+		const value = opts.inputEl.value;
+		const cm = COMMAND_RE.exec(value);
+		if (cm !== null) {
+			syncCommands(cm[1] ?? '');
 			return;
 		}
-		query = m[1] ?? '';
-		const next = filterSlashCommands(opts.getCommands(), query);
-		// Nothing matches: get out of the way so Enter sends the text as
-		// typed (Claude Code forwards unknown commands to the model with a
-		// note; other backends treat it as plain text).
-		if (next.length === 0) {
-			close();
+		const am = ARGUMENT_RE.exec(value);
+		if (am !== null) {
+			syncArgument((am[1] ?? '').toLowerCase(), am[2] ?? '');
 			return;
 		}
-		const changed = next.length !== items.length || next.some((n, i) => n !== items[i]);
-		items = next;
-		if (changed || !open) active = items.length > 0 ? 0 : -1;
-		open = true;
-		render();
+		close();
 	};
 
 	const pick = (index: number): void => {
-		const name = items[index];
-		if (name === undefined) return;
+		const item = items[index];
+		if (item === undefined) return;
+		const pickedMode = mode;
+		const pickedCommand = command;
 		close();
-		opts.onPick(name);
+		if (pickedMode === 'commands') opts.onPick(item.value);
+		else opts.onPickArgument(pickedCommand, item.value);
 	};
 
 	const handleKeydown = (ev: KeyboardEvent): boolean => {
@@ -170,22 +294,29 @@ export function renderSlashMenu(opts: SlashMenuOptions): SlashMenuHandle {
 			case 'ArrowDown':
 				if (items.length === 0) return false;
 				active = (active + 1) % items.length;
-				render();
+				render(mode === 'argument' ? opts.getArgumentStatus(command) : null);
 				return true;
 			case 'ArrowUp':
 				if (items.length === 0) return false;
 				active = (active - 1 + items.length) % items.length;
-				render();
+				render(mode === 'argument' ? opts.getArgumentStatus(command) : null);
 				return true;
 			case 'Enter':
 			case 'Tab': {
 				// Shift+Enter keeps its newline meaning.
 				if (ev.shiftKey || active < 0) return false;
-				// The command is already typed in full: Enter should send
-				// it, not rewrite it and demand a second Enter. Tab still
-				// completes (adds the trailing space).
-				const activeName = items[active];
-				if (ev.key === 'Enter' && activeName !== undefined && activeName.toLowerCase() === query.toLowerCase()) {
+				const activeItem = items[active];
+				if (activeItem === undefined) return false;
+				if (mode === 'commands' && ev.key === 'Enter' && activeItem.value.toLowerCase() === query.toLowerCase()) {
+					// The command is already typed in full. If it takes a
+					// picked argument, Enter opens that picker (the owner's
+					// onPick fills `/name ` and re-syncs); otherwise Enter
+					// should send it, not rewrite it and demand a second
+					// Enter. Tab still completes (adds the trailing space).
+					if (opts.getArgumentItems(activeItem.value.toLowerCase()) !== null) {
+						pick(active);
+						return true;
+					}
 					close();
 					return false;
 				}

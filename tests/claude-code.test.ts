@@ -748,6 +748,18 @@ describe('ClaudeCodeClient.listModels', () => {
 		const client = new ClaudeCodeClient(harness.plugin as any, harness.io);
 		expect(await client.listModels()).toEqual([]);
 	});
+
+	it('listModelCatalog() offers the CLI\'s documented aliases for the /model picker', async () => {
+		const harness = makeHarness();
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const client = new ClaudeCodeClient(harness.plugin as any, harness.io);
+		const catalog = await client.listModelCatalog();
+		expect(catalog.defaultModel).toBeNull();
+		expect(catalog.models.map((m) => m.id)).toEqual([
+			'sonnet', 'opus', 'haiku', 'fable', 'best', 'sonnet[1m]', 'opus[1m]', 'fable[1m]', 'opusplan',
+		]);
+		expect(catalog.models.every((m) => typeof m.detail === 'string' && m.detail.length > 0)).toBe(true);
+	});
 });
 
 describe('ClaudeCodeClient.streamChat — promise lifetime (regression)', () => {

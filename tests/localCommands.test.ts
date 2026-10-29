@@ -138,7 +138,9 @@ describe('runEffortCommand', () => {
 		const s = fakeSession(codex());
 		expect(runEffortCommand(s, codex(), 'xhigh').changed).toBe(true);
 		expect(runEffortCommand(s, codex(), 'none').changed).toBe(true);
-		expect(runEffortCommand(s, codex(), 'max').changed).toBe(false);
+		expect(runEffortCommand(s, codex(), 'max').changed).toBe(true);
+		// 'auto' is a Claude REPL word, valid for neither CLI flag.
+		expect(runEffortCommand(s, codex(), 'auto').ok).toBe(false);
 	});
 
 	it('tells LM Studio users there is no effort setting', () => {

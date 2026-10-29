@@ -463,11 +463,11 @@ describe('ChatSession — overrides are scoped to the provider that set them', (
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const session = new ChatSession(plugin as any, {
 			id: 's', createdAt: 1, updatedAt: 1, boundFilePath: null, history: [],
-			modelOverride: 'gpt-x', effortOverride: 'max', overrideProvider: 'codex',
+			modelOverride: 'gpt-x', effortOverride: 'auto', overrideProvider: 'codex',
 		});
 		expect(session.toSnapshot().overrideProvider).toBe('codex');
 		expect(session.effectiveModel()).toBe('gpt-x');
-		// 'max' is a Claude level, not a Codex one → provider default instead.
+		// 'auto' is not a Codex level (nor a Claude --effort one) → provider default instead.
 		expect(session.effectiveEffort()).toBe('');
 	});
 });

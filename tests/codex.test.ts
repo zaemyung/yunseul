@@ -395,3 +395,44 @@ describe('CodexClient.streamChat — argv size and error semantics (audit round 
 		expect(opts.errored?.message).toContain('not supported');
 	});
 });
+
+describe('CodexClient.listModelCatalog', () => {
+	it('reads the Codex CLI\'s local cache and config through the injected file reader, under $CODEX_HOME', async () => {
+		const h = makeHarness();
+		const reads: string[] = [];
+		const files = {
+			readFile: async (p: string): Promise<string> => {
+				reads.push(p);
+				if (p.endsWith('models_cache.json')) {
+					return JSON.stringify({ models: [
+						{ slug: 'gpt-b', visibility: 'list', priority: 2 },
+						{ slug: 'gpt-a', visibility: 'list', priority: 1, supported_reasoning_levels: [{ effort: 'low' }, { effort: 'ultra', description: 'Delegates' }] },
+					] });
+				}
+				if (p.endsWith('config.toml')) return 'model = "gpt-a"\n';
+				throw new Error('ENOENT');
+			},
+		};
+		const client = new CodexClient(h.plugin as any, { spawn: () => { throw new Error('no spawn expected'); } }, files);
+		const prev = process.env.CODEX_HOME;
+		process.env.CODEX_HOME = '/cx';
+		try {
+			const catalog = await client.listModelCatalog();
+			expect(reads).toEqual(['/cx/models_cache.json', '/cx/config.toml']);
+			expect(catalog.models.map((m) => m.id)).toEqual(['gpt-a', 'gpt-b']);
+			expect(catalog.models[0]?.efforts).toEqual([{ level: 'low' }, { level: 'ultra', detail: 'Delegates' }]);
+			expect(catalog.defaultModel).toBe('gpt-a');
+		} finally {
+			if (prev === undefined) delete process.env.CODEX_HOME;
+			else process.env.CODEX_HOME = prev;
+		}
+	});
+
+	it('yields an empty catalog when Codex has never written its files', async () => {
+		const h = makeHarness();
+		const client = new CodexClient(h.plugin as any, { spawn: () => { throw new Error('no spawn expected'); } }, {
+			readFile: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+		});
+		expect(await client.listModelCatalog()).toEqual({ models: [], defaultModel: null });
+	});
+});

@@ -43,6 +43,7 @@ function makeStub(opts?: { handles?: StreamHandles; retriever?: any }): {
 	plugin: YunseulPlugin;
 	openLinkText: ReturnType<typeof vi.fn>;
 	connectionListeners: Set<(s: string) => void>;
+	settingsListeners: Set<() => void>;
 } {
 	const sessions = new Map<string, ChatSession>();
 	const connectionListeners = new Set<(s: string) => void>();
@@ -110,7 +111,7 @@ function makeStub(opts?: { handles?: StreamHandles; retriever?: any }): {
 		},
 	};
 
-	return { plugin: plugin as YunseulPlugin, openLinkText, connectionListeners };
+	return { plugin: plugin as YunseulPlugin, openLinkText, connectionListeners, settingsListeners };
 }
 
 function makeView(plugin: YunseulPlugin): AIChatView {
@@ -429,6 +430,293 @@ describe('AIChatView — rejected local command keeps the text', () => {
 		triggerEnter(input);
 		await microtasks();
 		expect(input.value).toBe('/effort bogus');
+		await view.onClose();
+	});
+});
+
+describe('AIChatView — /model and /effort pickers', () => {
+	const CLAUDE_CATALOG = {
+		defaultModel: null,
+		models: [
+			{ id: 'sonnet', detail: 'Latest Sonnet' },
+			{ id: 'opus', detail: 'Latest Opus' },
+			{ id: 'haiku', detail: 'Fast' },
+		],
+	};
+	const CODEX_CATALOG = {
+		defaultModel: 'gpt-6.1-sol',
+		models: [
+			{ id: 'gpt-6.1-sol', detail: 'Workhorse', defaultEffort: 'low', efforts: [{ level: 'low' }, { level: 'medium' }, { level: 'max' }, { level: 'ultra', detail: 'Delegates' }] },
+			{ id: 'gpt-6-astra', detail: 'Frontier', efforts: [{ level: 'xhigh' }] },
+		],
+	};
+	const menuOf = (view: AIChatView): HTMLElement => view.containerEl.querySelector('.yunseul-slash-menu') as HTMLElement;
+	const rowNames = (view: AIChatView): string[] =>
+		Array.from(menuOf(view).querySelectorAll('.yunseul-slash-option-name')).map((e) => e.textContent ?? '');
+	const pressKey = (input: HTMLTextAreaElement, k: string): void => {
+		input.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+	};
+
+	it('bare /model + Enter opens the picker with the provider catalog, and Enter on a row applies it', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'claude-code';
+		(plugin.lmClient as any).listModelCatalog = async () => CLAUDE_CATALOG;
+		const view = makeView(plugin);
+		await view.onOpen();
+		const streamSpy = vi.spyOn(plugin.lmClient, 'streamChat');
+		const persistSpy = plugin.persistSession as unknown as ReturnType<typeof vi.fn>;
+		persistSpy.mockClear();
+
+		const input = getInput(view);
+		input.value = '/model';
+		triggerEnter(input);
+		await microtasks();
+
+		expect(streamSpy).not.toHaveBeenCalled();
+		expect(input.value).toBe('/model ');
+		expect(menuOf(view).classList.contains('is-open')).toBe(true);
+		expect(rowNames(view)).toEqual(['default', 'sonnet', 'opus', 'haiku']);
+		expect(menuOf(view).querySelector('.is-current .yunseul-slash-option-name')?.textContent).toBe('default');
+
+		pressKey(input, 'ArrowDown');
+		pressKey(input, 'ArrowDown');
+		pressKey(input, 'Enter');
+		await microtasks();
+
+		const session = Array.from(plugin.sessions.values())[0]!;
+		expect(session.modelOverride).toBe('opus');
+		expect(input.value).toBe('');
+		expect(menuOf(view).classList.contains('is-open')).toBe(false);
+		expect(persistSpy).toHaveBeenCalled();
+		expect(view.containerEl.textContent).toContain('opus');
+		expect(streamSpy).not.toHaveBeenCalled();
+
+		// Re-opening marks the new choice as current and lands on it.
+		input.value = '/model';
+		triggerEnter(input);
+		await microtasks();
+		expect(menuOf(view).querySelector('.is-current .yunseul-slash-option-name')?.textContent).toBe('opus');
+		expect(menuOf(view).querySelector('.is-active .yunseul-slash-option-name')?.textContent).toBe('opus');
+		await view.onClose();
+	});
+
+	it('/effort lists the current Codex model\'s levels from the catalog; a click applies one', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'codex';
+		(plugin.lmClient as any).listModelCatalog = async () => CODEX_CATALOG;
+		const view = makeView(plugin);
+		await view.onOpen();
+
+		const input = getInput(view);
+		input.value = '/effort';
+		triggerEnter(input);
+		await microtasks();
+		expect(rowNames(view)).toEqual(['default', 'low', 'medium', 'max', 'ultra']);
+		expect(menuOf(view).querySelectorAll('.yunseul-slash-option-detail')[0]?.textContent).toBe('Model default · low');
+
+		const rows = menuOf(view).querySelectorAll('.yunseul-slash-option');
+		(rows[4] as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		await microtasks();
+		const session = Array.from(plugin.sessions.values())[0]!;
+		expect(session.effortOverride).toBe('ultra');
+		// No Settings default and no override: the strip names the provider default.
+		expect(view.containerEl.textContent).toContain('codex (default) · ultra');
+
+		// Switching model narrows the effort list to that model's levels.
+		input.value = '/model gpt-6-astra';
+		triggerEnter(input);
+		await microtasks();
+		input.value = '/effort';
+		triggerEnter(input);
+		await microtasks();
+		expect(rowNames(view)).toEqual(['default', 'ultra', 'xhigh']);
+		await view.onClose();
+	});
+
+	it('with LM Studio, bare /effort gives the explanatory notice and opens no picker', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'lm-studio';
+		const view = makeView(plugin);
+		await view.onOpen();
+		const input = getInput(view);
+		input.value = '/effort';
+		triggerEnter(input);
+		await microtasks();
+		expect(menuOf(view).classList.contains('is-open')).toBe(false);
+		expect(input.value).toBe('');
+		await view.onClose();
+	});
+
+	it('LM Studio /model fetches listModels(), shows a status row while loading, and a custom id still works', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'lm-studio';
+		let resolveModels: (ids: string[]) => void = () => {};
+		(plugin.lmClient as any).listModels = () => new Promise<string[]>((r) => { resolveModels = r; });
+		const view = makeView(plugin);
+		await view.onOpen();
+		const input = getInput(view);
+		input.value = '/model';
+		triggerEnter(input);
+		await microtasks();
+		expect(menuOf(view).classList.contains('is-open')).toBe(true);
+		expect(menuOf(view).querySelector('.yunseul-slash-status')?.textContent).toBe('Loading models…');
+		expect(rowNames(view)).toEqual(['default']);
+
+		// Embedding models and ids the validator would reject are left out;
+		// LM Studio's `model@quant` ids are accepted.
+		resolveModels(['qwen-7b', 'text-embedding-x', 'qwen2.5-7b@q4_k_m', 'bad id']);
+		await microtasks();
+		expect(menuOf(view).querySelector('.yunseul-slash-status')).toBeNull();
+		expect(rowNames(view)).toEqual(['default', 'qwen-7b', 'qwen2.5-7b@q4_k_m']);
+
+		const rows = menuOf(view).querySelectorAll('.yunseul-slash-option');
+		(rows[2] as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		await microtasks();
+		expect(Array.from(plugin.sessions.values())[0]!.modelOverride).toBe('qwen2.5-7b@q4_k_m');
+
+		input.value = '/model';
+		triggerEnter(input);
+		await microtasks();
+
+		input.value = '/model my-local-model';
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		expect(menuOf(view).classList.contains('is-open')).toBe(false);
+		triggerEnter(input);
+		await microtasks();
+		const session = Array.from(plugin.sessions.values())[0]!;
+		expect(session.modelOverride).toBe('my-local-model');
+		await view.onClose();
+	});
+
+	it('a failed catalog fetch shows the reason in the status row and the picker still offers default', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'lm-studio';
+		(plugin.lmClient as any).listModels = async () => { throw new Error('ECONNREFUSED'); };
+		const view = makeView(plugin);
+		await view.onOpen();
+		const input = getInput(view);
+		input.value = '/model';
+		triggerEnter(input);
+		await microtasks();
+		expect(menuOf(view).querySelector('.yunseul-slash-status')?.textContent).toBe("Couldn't list models: ECONNREFUSED");
+		expect(rowNames(view)).toEqual(['default']);
+		expect((plugin.logger.warn as any).mock.calls.length).toBeGreaterThan(0);
+		await view.onClose();
+	});
+});
+
+describe('AIChatView — picker catalog lifecycle', () => {
+	const menuOf = (view: AIChatView): HTMLElement => view.containerEl.querySelector('.yunseul-slash-menu') as HTMLElement;
+	const statusText = (view: AIChatView): string | null => menuOf(view).querySelector('.yunseul-slash-status')?.textContent ?? null;
+	const rowNames = (view: AIChatView): string[] =>
+		Array.from(menuOf(view).querySelectorAll('.yunseul-slash-option-name')).map((e) => e.textContent ?? '');
+
+	it('a fetch that never settles times out into the error row, and re-opening retries', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'lm-studio';
+		let calls = 0;
+		(plugin.lmClient as any).listModels = () => { calls++; return new Promise<string[]>(() => {}); };
+		const view = makeView(plugin);
+		await view.onOpen();
+		vi.useFakeTimers();
+		const input = getInput(view);
+		input.value = '/model';
+		triggerEnter(input);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(statusText(view)).toBe('Loading models…');
+		expect(calls).toBe(1);
+
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(statusText(view)).toBe("Couldn't list models: timed out after 10 s");
+		expect(rowNames(view)).toEqual(['default']);
+
+		// Escape, then open again: the error state is retried.
+		input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+		input.value = '/model';
+		triggerEnter(input);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(calls).toBe(2);
+		expect(statusText(view)).toBe('Loading models…');
+		vi.useRealTimers();
+		await view.onClose();
+	});
+
+	it('a fetch landing after the view closed is dropped without touching anything', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin } = makeStub({ handles });
+		plugin.settings.provider = 'lm-studio';
+		let resolveModels: (ids: string[]) => void = () => {};
+		(plugin.lmClient as any).listModels = () => new Promise<string[]>((r) => { resolveModels = r; });
+		const view = makeView(plugin);
+		await view.onOpen();
+		const input = getInput(view);
+		input.value = '/model';
+		triggerEnter(input);
+		await microtasks();
+		await view.onClose();
+		resolveModels(['late-model']);
+		await microtasks();
+		expect((plugin.logger.warn as any).mock.calls).toHaveLength(0);
+		expect((plugin.logger.error as any).mock.calls).toHaveLength(0);
+	});
+
+	it('a settings change drops the cached catalog and an open picker refetches', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin, settingsListeners } = makeStub({ handles });
+		plugin.settings.provider = 'lm-studio';
+		let ids = ['first-a'];
+		let calls = 0;
+		(plugin.lmClient as any).listModels = async () => { calls++; return ids; };
+		const view = makeView(plugin);
+		await view.onOpen();
+		const input = getInput(view);
+		input.value = '/model';
+		triggerEnter(input);
+		await microtasks();
+		expect(rowNames(view)).toEqual(['default', 'first-a']);
+		expect(calls).toBe(1);
+
+		// Same provider, different server: the old list must not survive.
+		ids = ['second-b'];
+		plugin.settings.lmStudio.baseUrl = 'http://elsewhere';
+		for (const l of settingsListeners) l();
+		await microtasks();
+		expect(calls).toBe(2);
+		expect(menuOf(view).classList.contains('is-open')).toBe(true);
+		expect(rowNames(view)).toEqual(['default', 'second-b']);
+		await view.onClose();
+	});
+
+	it('a provider switch while a fetch is in flight masks the stale result', async () => {
+		const handles = {} as StreamHandles;
+		const { plugin, settingsListeners } = makeStub({ handles });
+		plugin.settings.provider = 'lm-studio';
+		let resolveModels: (ids: string[]) => void = () => {};
+		(plugin.lmClient as any).listModels = () => new Promise<string[]>((r) => { resolveModels = r; });
+		(plugin.lmClient as any).listModelCatalog = undefined;
+		const view = makeView(plugin);
+		await view.onOpen();
+		const input = getInput(view);
+		input.value = '/model';
+		triggerEnter(input);
+		await microtasks();
+		expect(statusText(view)).toBe('Loading models…');
+
+		plugin.settings.provider = 'claude-code';
+		(plugin.lmClient as any).listModelCatalog = async () => ({ models: [{ id: 'sonnet' }], defaultModel: null });
+		for (const l of settingsListeners) l();
+		await microtasks();
+		// The LM Studio fetch is still pending; the Claude catalog is what shows.
+		expect(rowNames(view)).toEqual(['default', 'sonnet']);
+		resolveModels(['lm-model']);
+		await microtasks();
+		expect(rowNames(view)).toEqual(['default', 'sonnet']);
 		await view.onClose();
 	});
 });

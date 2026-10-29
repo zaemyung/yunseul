@@ -124,6 +124,16 @@ export class ChatSession {
 		return providerDefaultModel(settings);
 	}
 
+	/** The chat's `/model` override when it belongs to the active provider, else null. */
+	activeModelOverride(): string | null {
+		return this.overrideProvider === this.plugin.settings.provider ? this.modelOverride : null;
+	}
+
+	/** The chat's `/effort` override when it belongs to the active provider, else null. */
+	activeEffortOverride(): string | null {
+		return this.overrideProvider === this.plugin.settings.provider ? this.effortOverride : null;
+	}
+
 	/** Effort the next send will use: chat override, else Settings default ('' = backend default). */
 	effectiveEffort(): string {
 		const settings = this.plugin.settings;

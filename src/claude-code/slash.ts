@@ -141,7 +141,7 @@ export function classifyLocalSlashCommand(name: string): LocalSlashCommand | nul
  */
 const EFFORT_LEVELS: Readonly<Record<string, readonly string[]>> = {
 	'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
-	codex: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+	codex: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
 };
 
 export function effortLevelsFor(provider: string): readonly string[] {

@@ -23,8 +23,10 @@ import type {
 	ProbeResult,
 	StreamChatOpts,
 } from '../llm/types';
+import type { ModelCatalog } from '../llm/catalog';
 import { CLAUDE_ENV_PREFIXES, buildSafeEnv } from './env';
 import type { ClaudeCodeIO } from './io';
+import { CLAUDE_MODEL_ALIASES } from './models';
 import { type LiveProc } from './lifecycle';
 import { probeBinary } from './probe';
 import { streamChat } from './streamChat';
@@ -106,6 +108,12 @@ export class ClaudeCodeClient implements LLMClient {
 	constructor(plugin: YunseulPlugin, io: ClaudeCodeIO = DEFAULT_IO) {
 		this.plugin = plugin;
 		this.io = io;
+	}
+
+	async listModelCatalog(): Promise<ModelCatalog> {
+		// Headless `claude` enumerates nothing; its documented aliases are
+		// the pickable set (plus any full model id the user types).
+		return { models: CLAUDE_MODEL_ALIASES, defaultModel: null };
 	}
 
 	async listModels(): Promise<string[]> {

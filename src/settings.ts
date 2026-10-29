@@ -931,7 +931,7 @@ export class YunseulSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Effort')
-			.setDesc('Optional default reasoning effort (`model_reasoning_effort`): none, minimal, low, medium, high, or xhigh. Blank uses your Codex config. `/effort` in a chat overrides this for that chat.')
+			.setDesc('Optional default reasoning effort (`model_reasoning_effort`): none, minimal, low, medium, high, xhigh, max, or ultra (each model accepts a subset; the `/effort` picker in a chat lists the ones the current model supports). Blank uses your Codex config. `/effort` in a chat overrides this for that chat.')
 			.addText((text) =>
 				text
 					.setPlaceholder('(Codex config default)')
@@ -974,7 +974,7 @@ export class YunseulSettingTab extends PluginSettingTab {
 	 */
 	private validModelId(id: string): boolean {
 		if (id.length === 0 || MODEL_OVERRIDE_PATTERN.test(id)) return true;
-		new Notice('Model ids may only contain letters, digits, and . _ : / - [ ] with no spaces. Not saved.');
+		new Notice('Model ids may only contain letters, digits, and . _ : / @ - [ ] with no spaces. Not saved.');
 		return false;
 	}
 

@@ -55,9 +55,10 @@ export const PROBE_TIMEOUT_MS = 10_000;
 // alternatives: a single char OR (first-char then up-to-127 tail chars).
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})$/;
 // Square brackets are allowed because Claude Code's own aliases include
-// them (`sonnet[1m]`, `opus[1m]`). Spawn passes argv without a shell, so
-// they carry no glob meaning here.
-export const MODEL_OVERRIDE_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:/[\]-]{0,127})$/;
+// them (`sonnet[1m]`, `opus[1m]`); `@` because LM Studio ids carry a quant
+// suffix (`model@q4_k_m`). Spawn passes argv without a shell, so none of
+// these carry glob or redirection meaning here.
+export const MODEL_OVERRIDE_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._:/@[\]-]{0,127})$/;
 // Effort levels are short lowercase words (`low` … `xhigh`, `max`). The
 // user-facing validation against each provider's list lives in
 // chat/localCommands.ts; this is the argv-safety floor.

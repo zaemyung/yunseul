@@ -28,12 +28,32 @@ import {
 	runSend,
 	type SendControllerHost,
 } from './SendController';
-import { classifyLocalSlashCommand, parseSlashCommand } from '../claude-code/slash';
+import { classifyLocalSlashCommand, effortLevelsFor, parseSlashCommand } from '../claude-code/slash';
 import { runEffortCommand, runModelCommand } from '../chat/localCommands';
+import {
+	effortPickerItems,
+	IDLE_CATALOG,
+	modelPickerItems,
+	pickerStatus,
+	type CatalogState,
+	type PickerContext,
+} from '../chat/pickerOptions';
+import type { ModelCatalog } from '../llm/catalog';
+import type { SlashMenuItem } from './SlashMenu';
+import { MODEL_OVERRIDE_PATTERN } from '../claude-code/constants';
 
 export const VIEW_TYPE_AI_CHAT = 'yunseul-chat';
 
 type Unsub = () => void;
+
+// How long a fetched model catalog is trusted before a picker re-opens
+// it. LM Studio's loaded set and Codex's cache both change rarely; the
+// user can always type an id that is not listed.
+const CATALOG_TTL_MS = 60_000;
+// A catalog fetch that has not settled by then is reported as failed so
+// the picker never sits on "Loading models…" (LM Studio's /v1/models has
+// no timeout of its own; a black-holed host would otherwise pin it).
+const CATALOG_TIMEOUT_MS = 10_000;
 
 export class AIChatView extends ItemView {
 	private readonly plugin: YunseulPlugin;
@@ -52,6 +72,9 @@ export class AIChatView extends ItemView {
 	private emptyStateHandle: EmptyStateHandle | null = null;
 	private headerHandle: ChatHeaderHandle | null = null;
 	private composerHandle: ChatComposerHandle | null = null;
+	/** Model catalog behind the /model and /effort pickers, per provider. */
+	private catalog: { provider: string; state: CatalogState; loadedAt: number } | null = null;
+	private catalogRequest = 0;
 	// Per-view-lifetime collapse state for the SOURCES block. SourcesKey
 	// already encodes sessionId, so the flat shape covers all sessions
 	// without nesting bugs. Cleared in onClose.
@@ -142,6 +165,11 @@ export class AIChatView extends ItemView {
 			const s = this.getActiveSession();
 			if (s !== undefined) this.headerHandle?.setStatus(s);
 			this.composerHandle?.updateContextRow();
+			// Provider, base URL, or binary may have changed: a finished
+			// catalog is stale, so the next picker open refetches (the
+			// composer restarts an open picker, which triggers that). A
+			// fetch still in flight is left to land.
+			if (this.catalog !== null && this.catalog.state.status !== 'loading') this.catalog = null;
 			this.composerHandle?.updateSlashHint();
 		});
 
@@ -182,7 +210,140 @@ export class AIChatView extends ItemView {
 				this.composerHandle?.updateContextRow();
 			},
 			onPreviousFocus: () => this.previousFocus?.focus(),
+			getArgumentItems: (command) => this.argumentItems(command),
+			getArgumentStatus: (command) => this.argumentStatus(command),
+			onPickArgument: (command, value) => this.pickArgument(command, value),
+			onArgumentMenuOpen: () => this.ensureCatalog(),
 		});
+	}
+
+	// ---- /model and /effort pickers --------------------------------------
+
+	private catalogState(): CatalogState {
+		const c = this.catalog;
+		return c !== null && c.provider === this.plugin.settings.provider ? c.state : IDLE_CATALOG;
+	}
+
+	/**
+	 * Fetch (or re-fetch) the active provider's catalog unless a fresh
+	 * one is already here or a fetch is in flight. Results for a
+	 * provider that is no longer active, or that arrive after a newer
+	 * request or after the view closed, are dropped.
+	 */
+	private ensureCatalog(): void {
+		const provider = this.plugin.settings.provider;
+		const current = this.catalogState();
+		if (current.status === 'loading') return;
+		if (current.status === 'ready' && this.catalog !== null && Date.now() - this.catalog.loadedAt < CATALOG_TTL_MS) return;
+		const request = ++this.catalogRequest;
+		this.catalog = {
+			provider,
+			state: { status: 'loading', catalog: current.catalog, error: null },
+			loadedAt: 0,
+		};
+		let timer: number | null = null;
+		const deadline = new Promise<never>((_, reject) => {
+			timer = window.setTimeout(
+				() => reject(new Error(`timed out after ${CATALOG_TIMEOUT_MS / 1000} s`)),
+				CATALOG_TIMEOUT_MS,
+			);
+		});
+		void Promise.race([this.loadCatalog(), deadline]).then(
+			(catalog) => {
+				if (timer !== null) window.clearTimeout(timer);
+				if (request !== this.catalogRequest || this.composerHandle === null) return;
+				this.catalog = { provider, state: { status: 'ready', catalog, error: null }, loadedAt: Date.now() };
+				this.composerHandle.refreshSlashMenu();
+			},
+			(err: unknown) => {
+				if (timer !== null) window.clearTimeout(timer);
+				if (request !== this.catalogRequest || this.composerHandle === null) return;
+				const reason = err instanceof Error ? err.message : String(err);
+				this.plugin.logger.warn(`model catalog: ${reason}`);
+				this.catalog = {
+					provider,
+					state: { status: 'error', catalog: current.catalog, error: reason.slice(0, 120) },
+					loadedAt: 0,
+				};
+				this.composerHandle.refreshSlashMenu();
+			},
+		);
+	}
+
+	private async loadCatalog(): Promise<ModelCatalog> {
+		const client = this.plugin.lmClient;
+		if (typeof client.listModelCatalog === 'function') return client.listModelCatalog();
+		const ids = await client.listModels();
+		// Only ids the command validator will accept, and no embedding
+		// models (they cannot chat; the no-model error filters them the
+		// same way).
+		const pickable = ids.filter((id) => MODEL_OVERRIDE_PATTERN.test(id) && !/embed/i.test(id));
+		return { models: pickable.map((id) => ({ id })), defaultModel: null };
+	}
+
+	private pickerContext(session: ChatSession): PickerContext {
+		return {
+			settings: this.plugin.settings,
+			state: this.catalogState(),
+			modelOverride: session.activeModelOverride(),
+			effortOverride: session.activeEffortOverride(),
+		};
+	}
+
+	private argumentItems(command: string): readonly SlashMenuItem[] | null {
+		const local = classifyLocalSlashCommand(command);
+		const session = this.getActiveSession();
+		if (local === null || session === undefined) return null;
+		switch (local.kind) {
+			case 'model':
+				return modelPickerItems(this.pickerContext(session));
+			case 'effort':
+				// LM Studio has no effort setting: no picker, the command
+				// itself explains.
+				if (effortLevelsFor(this.plugin.settings.provider).length === 0) return null;
+				return effortPickerItems(this.pickerContext(session));
+			default:
+				return null;
+		}
+	}
+
+	private argumentStatus(command: string): string | null {
+		const local = classifyLocalSlashCommand(command);
+		if (local === null || local.kind === 'new-chat') return null;
+		return pickerStatus(local.kind, this.plugin.settings.provider, this.catalogState());
+	}
+
+	private pickArgument(command: string, value: string): void {
+		const local = classifyLocalSlashCommand(command);
+		const session = this.getActiveSession();
+		if (local === null || local.kind === 'new-chat' || session === undefined) return;
+		// Safe mid-stream: overrides are read at the next send.
+		this.applyLocalCommand(session, local.kind, value);
+	}
+
+	/**
+	 * Run `/model <args>` or `/effort <args>` against the session and
+	 * reflect the outcome: a rejected value stays in the composer for
+	 * correction; a change is persisted and shown in the status strip;
+	 * either way the user gets a notice.
+	 */
+	private applyLocalCommand(session: ChatSession, kind: 'model' | 'effort', args: string): void {
+		const composer = this.composerHandle;
+		const outcome = kind === 'model'
+			? runModelCommand(session, this.plugin.settings, args)
+			: runEffortCommand(session, this.plugin.settings, args);
+		if (outcome.ok && composer !== null) {
+			composer.setValue('');
+			composer.resize();
+			composer.frameEl.removeClass('is-typing');
+		}
+		if (outcome.changed) {
+			session.updatedAt = Date.now();
+			this.plugin.persistSession(session);
+			this.headerHandle?.setStatus(session);
+		}
+		// Informational notices (usage, validation) stay up longer.
+		new Notice(outcome.notice, outcome.changed ? 4000 : 10000);
 	}
 
 	async onClose(): Promise<void> {
@@ -196,6 +357,9 @@ export class AIChatView extends ItemView {
 		this.activeThrottle?.cancel();
 		this.connectionUnsub?.();
 		this.settingsUnsub?.();
+		// Drop any catalog fetch still in flight for the pickers.
+		this.catalogRequest++;
+		this.catalog = null;
 		if (this.motionMql !== null && this.motionListener !== null) {
 			this.motionMql.removeEventListener('change', this.motionListener);
 		}
@@ -312,30 +476,27 @@ export class AIChatView extends ItemView {
 			// (Claude Code expands its own commands from there).
 			const parsed = parseSlashCommand(text);
 			const local = parsed === null ? null : classifyLocalSlashCommand(parsed.name);
-			if (local !== null) {
-				const clearComposer = (): void => {
-					if (composer === null) return;
-					composer.setValue('');
-					composer.resize();
-					composer.frameEl.removeClass('is-typing');
-				};
+			if (local !== null && parsed !== null) {
 				if (local.kind === 'new-chat') {
-					clearComposer();
+					if (composer !== null) {
+						composer.setValue('');
+						composer.resize();
+						composer.frameEl.removeClass('is-typing');
+					}
 					await this.startNewSession();
 					return;
 				}
-				const outcome = local.kind === 'model'
-					? runModelCommand(session, this.plugin.settings, parsed?.args ?? '')
-					: runEffortCommand(session, this.plugin.settings, parsed?.args ?? '');
-				// A rejected value stays in the composer for correction.
-				if (outcome.ok) clearComposer();
-				if (outcome.changed) {
-					session.updatedAt = Date.now();
-					this.plugin.persistSession(session);
-					this.headerHandle?.setStatus(session);
+				const args = parsed.args ?? '';
+				// Bare `/model` or `/effort`: open the option picker in the
+				// composer instead of describing the options in a notice
+				// (the CLIs' own commands do the same). Providers without
+				// a picker for the command (LM Studio's /effort) fall
+				// through to the explanatory notice.
+				if (args.trim().length === 0 && composer !== null && this.argumentItems(local.kind) !== null) {
+					composer.openArgumentPicker(local.kind);
+					return;
 				}
-				// Informational notices (usage, validation) stay up longer.
-				new Notice(outcome.notice, outcome.changed ? 4000 : 10000);
+				this.applyLocalCommand(session, local.kind, args);
 				return;
 			}
 			if (composer !== null) {

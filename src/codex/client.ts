@@ -4,14 +4,17 @@
 // unless the user enables writes. Auth stays inside the user's Codex
 // install (`codex login`); Yunseul never sees a key.
 import { spawn } from 'child_process';
+import { promises as fsp } from 'fs';
 import type YunseulPlugin from '../main';
 import type { LLMClient, ProbeResult, StreamChatOpts } from '../llm/types';
+import type { ModelCatalog } from '../llm/catalog';
 import { redactSecrets } from '../util/redact';
 import { vaultBasePath } from '../util/paths';
 import { buildSafeEnv } from '../claude-code/env';
 import type { LiveProc, SubprocessIO } from '../claude-code/lifecycle';
 import { probeBinary } from '../claude-code/probe';
 import { CODEX_ENV_PREFIXES, codexBinary, streamCodexChat } from './streamChat';
+import { readCodexCatalog, type CatalogFiles } from './catalog';
 
 // Subprocess invocation (see argv.ts for the verified flag set):
 //   codex exec [resume <thread>] --json --skip-git-repo-check
@@ -21,21 +24,39 @@ import { CODEX_ENV_PREFIXES, codexBinary, streamCodexChat } from './streamChat';
 // The user prompt goes on stdin; stdout is JSONL (events.ts).
 
 const DEFAULT_IO: SubprocessIO = { spawn };
+const DEFAULT_FILES: CatalogFiles = {
+	readFile: (path) => fsp.readFile(path, { encoding: 'utf8' }),
+};
 
 export class CodexClient implements LLMClient {
 	private readonly plugin: YunseulPlugin;
 	private readonly io: SubprocessIO;
+	private readonly files: CatalogFiles;
 	private readonly liveProcs = new Set<LiveProc>();
 
-	constructor(plugin: YunseulPlugin, io: SubprocessIO = DEFAULT_IO) {
+	constructor(plugin: YunseulPlugin, io: SubprocessIO = DEFAULT_IO, files: CatalogFiles = DEFAULT_FILES) {
 		this.plugin = plugin;
 		this.io = io;
+		this.files = files;
 	}
 
 	async listModels(): Promise<string[]> {
-		// Codex does not enumerate models for a ChatGPT login; the user's
-		// config.toml or `/model` picks. Empty = "backend decides".
+		// `codex exec` has no model listing; the settings dropdown stays
+		// a free-text field. Empty = "backend decides". The pickers use
+		// listModelCatalog() instead.
 		return [];
+	}
+
+	async listModelCatalog(): Promise<ModelCatalog> {
+		// Read from the Codex CLI's own local files (see catalog.ts):
+		// $CODEX_HOME/models_cache.json for the account's models and
+		// per-model effort levels, config.toml for the default model.
+		const env = process.env;
+		return readCodexCatalog(
+			this.files,
+			{ CODEX_HOME: env.CODEX_HOME, HOME: env.HOME, USERPROFILE: env.USERPROFILE, platform: process.platform },
+			(msg) => this.plugin.logger.warn(msg),
+		);
 	}
 
 	killAll(): void {

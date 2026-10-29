@@ -22,7 +22,7 @@ yunseul/
     lmstudio/            # OpenAI-compatible HTTP/SSE client
     claude-code/         # Claude Code subprocess client (env, ndjson, lifecycle, probe, sysprompt, slash, …)
                          #   lifecycle/env/probe/dispatch/splitMessages double as the shared subprocess plumbing
-    codex/               # Codex CLI subprocess client (argv, events, toml, streamChat) built on that plumbing
+    codex/               # Codex CLI subprocess client (argv, events, toml, streamChat, catalog) built on that plumbing
     index/               # BM25 inverted index + retriever
     ui/                  # AIChatView orchestrator + extracted modules
     util/                # shared helpers (guards, paths, log, throttle, redact, lineBuffer)
@@ -106,7 +106,7 @@ The vitest suites under `tests/` exercise the same code from a JSDOM environment
 
 ### Provider abstraction (LLMClient)
 
-The chat layer only ever sees `LLMClient` from `src/llm/types.ts` — a narrow interface (`listModels`, `streamChat`, `probe`, plus an optional `killAll` for subprocess-backed clients). Today's three implementations are `LMClient` (`src/lmstudio/client.ts`, plain `fetch` + an inline SSE parser), `ClaudeCodeClient` (`src/claude-code/client.ts`, orchestrator over env/lifecycle/ndjson/probe/sysprompt modules), and `CodexClient` (`src/codex/client.ts`, `codex exec --json` with `exec resume` for thread continuity; the system prompt travels as a `-c developer_instructions=` TOML override). `src/llm/factory.ts` picks one based on `settings.provider`; the chat session, view, prompt assembler, and persistence layer never look at the discriminator themselves — the session resolves the effective model/effort (per-chat `/model` `/effort` override → provider setting → backend default, see `src/chat/localCommands.ts`) and passes them in `StreamChatOpts`.
+The chat layer only ever sees `LLMClient` from `src/llm/types.ts` — a narrow interface (`listModels`, `streamChat`, `probe`, plus an optional `killAll` for subprocess-backed clients and an optional `listModelCatalog` that feeds the `/model` and `/effort` pickers with ids, descriptions, and per-model effort levels; `src/llm/catalog.ts` has the shape, `src/claude-code/models.ts` the Claude aliases, `src/codex/catalog.ts` the reader for Codex's local `models_cache.json` + `config.toml`). Today's three implementations are `LMClient` (`src/lmstudio/client.ts`, plain `fetch` + an inline SSE parser), `ClaudeCodeClient` (`src/claude-code/client.ts`, orchestrator over env/lifecycle/ndjson/probe/sysprompt modules), and `CodexClient` (`src/codex/client.ts`, `codex exec --json` with `exec resume` for thread continuity; the system prompt travels as a `-c developer_instructions=` TOML override). `src/llm/factory.ts` picks one based on `settings.provider`; the chat session, view, prompt assembler, and persistence layer never look at the discriminator themselves — the session resolves the effective model/effort (per-chat `/model` `/effort` override → provider setting → backend default, see `src/chat/localCommands.ts`) and passes them in `StreamChatOpts`.
 
 ### Settings (schemaVersion + grouped shape + migration)
 
@@ -122,7 +122,7 @@ The chat layer only ever sees `LLMClient` from `src/llm/types.ts` — a narrow i
 
 - `ChatHeader.ts` — wordmark, status strip, Copy all / Download / New chat buttons.
 - `ChatComposer.ts` — textarea, send/stop morph button, slash hint, bound-file pill, slash-command popover wiring (popover gets first pick of keystrokes, then Enter sends).
-- `SlashMenu.ts` — the `/` command popover: a listbox driven from the textarea (`aria-activedescendant`). It always offers Yunseul's own commands (`/clear`, `/model`, `/effort`, handled in `src/chat/localCommands.ts`) and, for Claude Code, the CLI's own list from `settings.claudeCode.knownSlashCommands`, which `main.ts` refreshes from every `system/init`. Pure parsing/validation lives in `src/claude-code/slash.ts`.
+- `SlashMenu.ts` — the `/` command popover: a listbox driven from the textarea (`aria-activedescendant`). In command mode it always offers Yunseul's own commands (`/clear`, `/model`, `/effort`, handled in `src/chat/localCommands.ts`) and, for Claude Code, the CLI's own list from `settings.claudeCode.knownSlashCommands`, which `main.ts` refreshes from every `system/init`. Once the value is `/model ` or `/effort ` it switches to argument mode and lists option rows the view supplies (`src/chat/pickerOptions.ts` builds them from the provider catalog; picking runs the command). Pure parsing/validation lives in `src/claude-code/slash.ts`.
 - `EmptyState.ts` — logo, tagline, bound-note indicator, and composer hint.
 - `SourcesBlock.ts` — "Top retrieved sources" collapsible with stable keying.
 - `ChatExporter.ts` — `sessionToMarkdown`, copy-all, download-conversation.

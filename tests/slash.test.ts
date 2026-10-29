@@ -121,7 +121,7 @@ describe('classifyLocalSlashCommand', () => {
 describe('effortLevelsFor / isResetWord / availableSlashCommands', () => {
 	it('lists each backend\'s accepted effort levels, empty for LM Studio', () => {
 		expect(effortLevelsFor('claude-code')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
-		expect(effortLevelsFor('codex')).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+		expect(effortLevelsFor('codex')).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 		expect(effortLevelsFor('lm-studio')).toEqual([]);
 		expect(effortLevelsFor('nope')).toEqual([]);
 	});

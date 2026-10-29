@@ -108,7 +108,7 @@ export function runModelCommand(
 	}
 	if (!MODEL_OVERRIDE_PATTERN.test(arg)) {
 		return {
-			notice: 'Model ids may only contain letters, digits, and . _ : / - [ ] with no spaces.',
+			notice: 'Model ids may only contain letters, digits, and . _ : / @ - [ ] with no spaces.',
 			changed: false,
 			ok: false,
 		};

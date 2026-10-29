@@ -52,8 +52,8 @@ Spawns the local `codex` CLI (`codex exec --json`). As with Claude Code, Yunseul
 
 Type `/` in the composer for a command list. On every backend, Yunseul handles these itself:
 
-- **`/model <id>`** switches the model for the current chat; `/model` alone shows the current one and the names your backend accepts; `/model default` goes back to the setting. The choice is stored with the chat and shown in the status strip.
-- **`/effort <level>`** does the same for reasoning effort. Claude Code accepts low, medium, high, xhigh, max; Codex accepts none, minimal, low, medium, high, xhigh; LM Studio has no effort setting.
+- **`/model`** opens a picker of the models your backend offers, the way the CLIs' own `/model` does: arrow keys or typing to filter, Enter or a click to apply, `default` at the top to go back to the setting. The row in effect is marked "current". With Claude Code the list is the CLI's documented aliases (sonnet, opus, haiku, fable, best, the `[1m]` variants, opusplan); with Codex it is the account's model catalog that the Codex CLI keeps locally, with each model's description; with LM Studio it is whatever the server has loaded. `/model <id>` still applies an id directly, including ones that are not listed. The choice is stored with the chat and shown in the status strip.
+- **`/effort`** does the same for reasoning effort. Claude Code offers low, medium, high, xhigh, max; Codex offers the levels the current model supports (from the same local catalog; typically low through ultra, and the picker adjusts when you switch model); LM Studio has no effort setting.
 - **`/clear`** starts a new chat, so the transcript and the backend session stay in step.
 
 With the Claude Code provider, any other message that starts with `/` is handed to the CLI as a command, the same way it works in the terminal:
@@ -71,6 +71,7 @@ Codex's own interactive slash commands do not exist in its non-interactive mode,
 - **LM Studio path:** prompts, vault excerpts, and retrieved chunks stay on your machine. No network calls leave the host beyond the local server URL you configured.
 - **Claude Code path:** prompts, vault excerpts, and retrieved chunks are sent to Anthropic via your authenticated `claude` CLI. See Anthropic's privacy policy: https://www.anthropic.com/legal/privacy
 - **Codex path:** prompts, vault excerpts, and retrieved chunks are sent to OpenAI via your authenticated `codex` CLI, which also keeps its own session transcripts under `~/.codex/`. See OpenAI's privacy policy: https://openai.com/policies/privacy-policy
+- **Codex model picker** reads two of the Codex CLI's own local files to list models: `~/.codex/models_cache.json` (the catalog the CLI fetches and refreshes itself) and the top-level `model` key of `~/.codex/config.toml`. Both reads are local and read-only; Yunseul never writes to `~/.codex/` and never fetches the catalog itself. `$CODEX_HOME` is honoured.
 - **BM25 index** stays in your vault at `<vault>/.yunseul/bm25-index.json`. It is never uploaded by Yunseul itself; any sync service watching the vault will see it (see "Sync services" below).
 - **Sessions** persist locally at `<vault>/.obsidian/plugins/yunseul/sessions/<id>.json`.
 - **Environment variables are allowlist-filtered, not collected.** Each CLI subprocess inherits only a minimal allowlist: `PATH`, locale, and proxy vars for both, plus the auth vars its own CLI needs — `CLAUDE_*`/`ANTHROPIC_*`/`AWS_*`/`GOOGLE_*`/`VERTEX_*` for Claude Code, `OPENAI_*`/`CODEX_*` for Codex — and never the other provider's. Everything else — including all `ELECTRON_*` internals — is stripped. Yunseul never reads hostname, username, or hardware identifiers, and no environment data leaves your machine.
